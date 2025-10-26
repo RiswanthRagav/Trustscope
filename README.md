@@ -4,7 +4,7 @@
 
 ![Status](https://img.shields.io/badge/status-research-blue)
 ![Focus](https://img.shields.io/badge/focus-Active%20Directory-4B8BBE)
-![License](https://img.shields.io/badge/license-MIT-green)
+
 
 ---
 
