@@ -7,7 +7,7 @@ import streamlit as st
 from streamlit.components.v1 import html
 import pandas as pd
 df_summary = pd.DataFrame()
-import networkx as nx
+
 from pyvis.network import Network
 import plotly.express as px
 import plotly.graph_objects as go   
@@ -598,3 +598,4 @@ Dive in if for the details of what’s really happening in your Domain, or just 
 for title, text in reports:
     with st.expander(title, expanded=False):
         st.code(text, language="text")
+
