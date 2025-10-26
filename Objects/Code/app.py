@@ -57,7 +57,7 @@ from cat_12 import run_category12
 from cat_13 import run_category13
 
 # ---- CONFIG ----
-INPUT_DIR = r"C:\Users\LENOVO\OneDrive\Desktop\dissertation\Nexora.local"
+
 FILES = {
     "ous":        "nexora.local_ous.json",
     "users":      "nexora.local_users.json",
@@ -630,4 +630,5 @@ Dive in if for the details of what’s really happening in your Domain, or just 
 for title, text in reports:
     with st.expander(title, expanded=False):
         st.code(text, language="text")
+
 
