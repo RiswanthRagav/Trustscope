@@ -1,3 +1,35 @@
+# ---- CONFIG ----
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent
+
+# Prefer the exact folder, but be a bit defensive about possible renames
+CANDIDATE_DIRS = [
+    REPO_ROOT / "Objects" / "Domain Data",   # your stated path
+    REPO_ROOT / "Objects" / "DomainData",    # just in case someone removes the space
+    REPO_ROOT / "Objects" / "domain data",   # case-variance fallback
+]
+
+INPUT_DIR = None
+for p in CANDIDATE_DIRS:
+    if p.exists():
+        INPUT_DIR = p
+        break
+
+# If nothing matched, fall back to the original 'data' folder to keep the app usable
+if INPUT_DIR is None:
+    INPUT_DIR = REPO_ROOT / "data"
+
+FILES = {
+    "ous":        "nexora.local_ous.json",
+    "users":      "nexora.local_users.json",
+    "groups":     "nexora.local_groups.json",
+    "computers":  "nexora.local_computers.json",
+    "domains":    "nexora.local_domains.json",
+    "gpos":       "nexora.local_gpos.json",
+    "containers": "nexora.local_containers.json",
+}
+
 # app.py
 import json
 from pathlib import Path
@@ -598,3 +630,4 @@ Dive in if for the details of what’s really happening in your Domain, or just 
 for title, text in reports:
     with st.expander(title, expanded=False):
         st.code(text, language="text")
+
