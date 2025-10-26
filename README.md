@@ -1,37 +1,57 @@
-# 🔐 TrustScope — Make AD Risk Measurable, Explainable & Actionable
+# TrustScope
+A transparent, graph-powered AD risk framework with explainable scoring and path-aware remediation—built for fast, auditable identity hardening.
 
-> **One-liner:** Research-led platform that turns Active Directory (AD) state into **transparent 0–100 risk scores**, **attack-path insights**, and **prescriptive fixes**—useful for exec dashboards and engineer runbooks. ✨
-
-![Status](https://img.shields.io/badge/status-research-blue)
-![Focus](https://img.shields.io/badge/focus-Active%20Directory-4B8BBE)
-
+## TrustScope: Open, Explainable AD Risk Scoring & Attack-Path Analytics
+TrustScope is an end-to-end framework that turns Active Directory state into **0–100 risk KPIs**, **graph-derived escalation paths**, and **prescriptive fixes**. It combines a standards-aligned rule ledger (CIS, Microsoft, MITRE ATT&CK) with a trust graph to prioritize the few changes that collapse the most attack paths—**no black boxes**.
 
 ---
 
-## 🧠 How It Works
-- **Collect (read-only):** Users, groups, computers, OUs/GPOs, trusts via PowerShell / LDAP / WinRM.
-- **Normalize:** Validate into JSON/CSV 📄 with checksums/timestamps.
-- **Score:** Rule engine with **Likelihood × Impact × Weight** → category scores → **domain KPI (0–100)** 📊
-- **Traceable:** Every rule cites **CIS Benchmarks**, **Microsoft hardening**, and **MITRE ATT&CK** for audit-ready provenance. 🧾
+## 🚀 Key Features
+- **Explainable Risk Scoring:** Transparent **L × I × W** rubric per rule; category weights; normalized **0–100** KPI.
+- **Graph-Aware Prioritization:** Model users, groups, ACLs, delegation, trusts → find **shortest paths** to Tier-0 and **choke points** to fix first.
+- **What-If Remediation Simulator:** Test KRBTGT rotation, removing unconstrained delegation, shrinking privileged groups, disabling legacy auth → see **Δscore** and **paths removed**.
+- **Dual Views:** Executive radar/severity/trends for KPIs; engineer ledger with **evidence links** (DNs, GPO paths) and **step-by-step playbooks**.
+- **Reproducible by Design:** Read-only collectors, versioned schemas, deterministic scoring, auditable rule provenance (CIS/Microsoft/ATT&CK).
 
 ---
 
-## 🕸️ Graph Intelligence (Beyond Checklists)
-- **Identity & trust graph:** Nodes = Users, Groups, Computers, DCs, OUs, GPOs, Trusts.  
-  Edges = MemberOf, ACL rights (GenericAll/WriteDACL), Delegation, GPO links, Sessions, LocalAdmin/RDP.
-- **Find paths:** Shortest escalation routes to **Tier-0** (DCs, DA/EA, PKI CA) and **choke points** where one fix kills many paths. 🧩
-- **What-if lab:** Rotate **KRBTGT**, remove **unconstrained delegation**, shrink **privileged groups**, disable **legacy auth** → see **Δscore** and paths removed. 🧪
+## 🏗️ Architecture
+**Collection → Ingestion → Rule Engine & Graph → Scoring → Presentation/Exports**
+
+- **Collection:** PowerShell/LDAP/WinRM (Windows), Kerberos/NTLM scripts (Linux) — read-only.
+- **Ingestion:** JSON/CSV validation, checksums, timestamps.
+- **Rule Engine:** Standards-aligned checks with L/I/W and category weights.
+- **Graph:** Nodes (Users, Groups, Computers, DCs, OUs, GPOs, Trusts); Edges (MemberOf, ACL rights, Delegation, GPO links, Sessions, LocalAdmin/RDP).
+- **Presentation:** Dashboards, evidence drill-downs, reports; exports (**JSON/CSV/PDF/API**).
+
+> _Diagram:_ `docs/figs/trustscope-architecture.svg`
 
 ---
 
-## 📈 Outputs For Everyone
-- **Leaders:** Overall risk score, category radar, severity breakdown, trends. 🚦  
-- **Engineers:** Full rule ledger with deep links (DNs, GPO paths, attributes) + prescriptive playbooks. 🛠️  
-- **Lab highlight:** Detected **85.8% (High)** posture concentrated in privileged identities, DC health, and trust management; **top-5 fixes** significantly reduced open paths to Tier-0. 🚀
+## 🛠️ Technology Stack
+- **Collectors:** PowerShell, Bash, LDAP, WinRM  
+- **Scoring/Graph:** Python, NetworkX/graph DB (optional), Pandas  
+- **UI:** Streamlit or FastAPI + React (optional)  
+- **Standards:** CIS Benchmarks, Microsoft AD hardening, MITRE ATT&CK  
+- **Ops:** Docker (optional), Make, pre-commit, GitHub Actions (CI)
 
 ---
 
-## 🧰 What’s In The Box
-- **Schemas** • **Collectors** • **Scoring & Graph tooling** • **Dashboards**  
-- **Exports:** JSON / CSV / PDF / API for audits and integrations. 🔌
+## 📊 Example Results (Lab Validation)
+| Scenario / Metric | Result |
+|---|---|
+| Overall Domain Risk (baseline) | **85.8% (High)** |
+| Critical Misconfig Density | **40.4% of failures = High** |
+| Top Weak Areas | Privileged Identities, DC Health, Privilege/Trust Mgmt |
+| What-If (Top-5 Fixes) | Open paths to Tier-0 ↓ **61%** |
+| Projected KPI After Fixes | **63.4** |
+
+---
+
+## 🔒 Security & Ethics
+- Read-only data collection; **no secrets harvested**.  
+- Exports can be **anonymized & encrypted**.  
+- Use in lab or with **written authorization** only.
+
+---
 
