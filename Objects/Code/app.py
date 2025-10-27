@@ -185,87 +185,100 @@ computers, domains, gpos, containers = (
     data["computers"], data["domains"], data["gpos"], data["containers"]
 )
 
-# -------------------- Build the graph --------------------
+
 # -------------------- Build the graph --------------------
 G = nx.DiGraph()
+def add_node_from_obj(obj, ntype: str):
+    dn = prop(obj, "distinguishedname")
+    name = prop(obj, "name") or dn or ntype
+    if not dn:
+        return None
+    if dn not in G:
+        G.add_node(dn, label=name, type=ntype)
+    return dn
 
-    def add_node_from_obj(obj, ntype: str):
-        dn = prop(obj, "distinguishedname")
-        name = prop(obj, "name") or dn or ntype
-        if not dn:
-            return None
-        if dn not in G:
-            G.add_node(dn, label=name, type=ntype)
-        return dn
+for d in domains:
+    add_node_from_obj(d, "Domain")
+for ou in ous:
+    add_node_from_obj(ou, "OU")
+for ct in containers:
+    add_node_from_obj(ct, "Container")
+for u in users:
+    add_node_from_obj(u, "User")
+for g in groups:
+    add_node_from_obj(g, "Group")
+for gp in gpos:
+    add_node_from_obj(gp, "GPO")
+for c in computers:
+    dn = prop(c, "distinguishedname")
+    name = prop(c, "name") or dn or "Computer"
+    ntype = "DC" if dn and "OU=Domain Controllers" in dn else "Computer"
+    if dn and dn not in G:
+        G.add_node(dn, label=name, type=ntype)
 
-    for d in domains: add_node_from_obj(d, "Domain")
-    for ou in ous: add_node_from_obj(ou, "OU")
-    for ct in containers: add_node_from_obj(ct, "Container")
-    for u in users: add_node_from_obj(u, "User")
-    for g in groups: add_node_from_obj(g, "Group")
-    for gp in gpos: add_node_from_obj(gp, "GPO")
-    for c in computers:
-        dn = prop(c, "distinguishedname")
-        name = prop(c, "name") or dn or "Computer"
-        ntype = "DC" if dn and "OU=Domain Controllers" in dn else "Computer"
-        if dn and dn not in G:
-            G.add_node(dn, label=name, type=ntype)
+def add_containment_edges(coll):
+    for obj in coll:
+        child_dn = prop(obj, "distinguishedname")
+        if not child_dn or child_dn not in G:
+            continue
+        parent_dn = dn_parent(child_dn)
+        if parent_dn:
+            if parent_dn not in G:
+                G.add_node(parent_dn, label=parent_dn, type="Container")
+            G.add_edge(parent_dn, child_dn, relationship="contains")
 
-    def add_containment_edges(coll):
-        for obj in coll:
-            child_dn = prop(obj, "distinguishedname")
-            if not child_dn or child_dn not in G:
-                continue
-            parent_dn = dn_parent(child_dn)
-            if parent_dn:
-                if parent_dn not in G:
-                    G.add_node(parent_dn, label=parent_dn, type="Container")
-                G.add_edge(parent_dn, child_dn, relationship="contains")
+for coll in (domains, ous, containers, users, groups, gpos, computers):
+    add_containment_edges(coll)
 
-    for coll in (domains, ous, containers, users, groups, gpos, computers):
-        add_containment_edges(coll)
+# Group memberships
+for g in groups:
+    g_dn = prop(g, "distinguishedname")
+    members = (g.get("Properties") or {}).get("member", [])
+    if isinstance(members, str):
+        members = [members]
+    for m in members:
+        if g_dn and m in G:
+            G.add_edge(g_dn, m, relationship="member")
 
-    # Group memberships
-    for g in groups:
-        g_dn = prop(g, "distinguishedname")
-        members = (g.get("Properties") or {}).get("member", [])
-        if isinstance(members, str):
-            members = [members]
-        for m in members:
-            if g_dn and m in G:
-                G.add_edge(g_dn, m, relationship="member")
+# GPO links
+for ou in ous:
+    ou_dn = prop(ou, "distinguishedname")
+    gplink = (ou.get("Properties") or {}).get("gplink", "")
+    if gplink and ou_dn:
+        for gp in gpos:
+            gp_dn = prop(gp, "distinguishedname")
+            gp_name = prop(gp, "name")
+            if gp_name and gp_name in gplink and gp_dn in G:
+                G.add_edge(ou_dn, gp_dn, relationship="gplink")
 
-    # GPO links
-    for ou in ous:
-        ou_dn = prop(ou, "distinguishedname")
-        gplink = (ou.get("Properties") or {}).get("gplink", "")
-        if gplink and ou_dn:
-            for gp in gpos:
-                gp_dn = prop(gp, "distinguishedname")
-                gp_name = prop(gp, "name")
-                if gp_name and gp_name in gplink and gp_dn in G:
-                    G.add_edge(ou_dn, gp_dn, relationship="gplink")
+# Domain trusts
+domain_names = {prop(d, "name"): prop(d, "distinguishedname") for d in domains}
+for d in domains:
+    d_dn = prop(d, "distinguishedname")
+    trust_partner = (d.get("Properties") or {}).get("trustpartner")
+    if d_dn and trust_partner and trust_partner in domain_names:
+        G.add_edge(d_dn, domain_names[trust_partner], relationship="trust")
 
-    # Domain trusts
-    domain_names = {prop(d, "name"): prop(d, "distinguishedname") for d in domains}
-    for d in domains:
-        d_dn = prop(d, "distinguishedname")
-        trust_partner = (d.get("Properties") or {}).get("trustpartner")
-        if d_dn and trust_partner and trust_partner in domain_names:
-            G.add_edge(d_dn, domain_names[trust_partner], relationship="trust")
+# Filter toggles
+allowed_types = set()
+if show_domain:
+    allowed_types.add("Domain")
+if show_ou:
+    allowed_types.add("OU")
+if show_container:
+    allowed_types.add("Container")
+if show_user:
+    allowed_types.add("User")
+if show_group:
+    allowed_types.add("Group")
+if show_computer:
+    allowed_types.update(["Computer", "DC"])
+if show_gpo:
+    allowed_types.add("GPO")
 
-    # Filter toggles
-    allowed_types = set()
-    if show_domain: allowed_types.add("Domain")
-    if show_ou: allowed_types.add("OU")
-    if show_container: allowed_types.add("Container")
-    if show_user: allowed_types.add("User")
-    if show_group: allowed_types.add("Group")
-    if show_computer: allowed_types.update(["Computer", "DC"])
-    if show_gpo: allowed_types.add("GPO")
+nodes_to_keep = [n for n, a in G.nodes(data=True) if a.get("type") in allowed_types]
+SG = G.subgraph(nodes_to_keep).copy()
 
-    nodes_to_keep = [n for n, a in G.nodes(data=True) if a.get("type") in allowed_types]
-    SG = G.subgraph(nodes_to_keep).copy()
 
     # -------------------- Visualize Domain Graph --------------------
     # -------------------- Visualize Domain Graph --------------------
@@ -335,5 +348,6 @@ if summaries:
     st.dataframe(df_summary, use_container_width=True)
 else:
     st.warning("No summary data found — check your JSON files in 'Objects/Domain Data' folder.")
+
 
 
