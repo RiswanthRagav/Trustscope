@@ -186,10 +186,8 @@ computers, domains, gpos, containers = (
 )
 
 # -------------------- Build the graph --------------------
-if not _NX_AVAILABLE:
-    st.error("⚠️ `networkx` is not installed. Please confirm `requirements.txt` is at the repo root and includes `networkx>=3.3`.")
-else:
-    G = nx.DiGraph()
+# -------------------- Build the graph --------------------
+G = nx.DiGraph()
 
     def add_node_from_obj(obj, ntype: str):
         dn = prop(obj, "distinguishedname")
@@ -337,4 +335,5 @@ if summaries:
     st.dataframe(df_summary, use_container_width=True)
 else:
     st.warning("No summary data found — check your JSON files in 'Objects/Domain Data' folder.")
+
 
