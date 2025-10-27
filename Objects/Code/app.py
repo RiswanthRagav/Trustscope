@@ -1,5 +1,6 @@
-# app.py
+# app.py  — self-healing imports + correct data path from Objects/Code -> Objects/Domain Data
 import json
+import sys, subprocess, importlib
 from pathlib import Path
 from typing import Dict, Any, List
 
@@ -7,25 +8,40 @@ import streamlit as st
 from streamlit.components.v1 import html
 import pandas as pd
 
-# --- Safe imports (prevent crash if modules missing) ---
-try:
-    import networkx as nx
-    _NX_AVAILABLE = True
-except Exception:
-    _NX_AVAILABLE = False
-    nx = None  # type: ignore
+def ensure_pkg(pip_name: str, import_name: str | None = None, version: str | None = None):
+    """Import a package; if missing, pip install it and import again."""
+    mod_name = import_name or pip_name
+    try:
+        return importlib.import_module(mod_name)
+    except Exception:
+        try:
+            pkg_spec = f"{pip_name}=={version}" if version else pip_name
+            with st.spinner(f"Installing {pkg_spec}..."):
+                subprocess.check_call([sys.executable, "-m", "pip", "install", pkg_spec])
+            return importlib.import_module(mod_name)
+        except Exception as e:
+            st.error(f"Failed to import or install {pip_name}: {e}")
+            raise
 
+# Ensure critical deps (works even if requirements.txt wasn't picked up)
+nx = ensure_pkg("networkx")                           # import networkx as nx
+px = ensure_pkg("plotly")                              # plotly base
+_ = ensure_pkg("plotly-express", "plotly.express")     # ensure plotly.express is present
+_ = ensure_pkg("plotly", "plotly.graph_objects")       # ensure plotly.graph_objects is present
+
+# Try pyvis (optional)
 try:
+    pyvis_mod = ensure_pkg("pyvis")
     from pyvis.network import Network
     _PYVIS_AVAILABLE = True
 except Exception:
     _PYVIS_AVAILABLE = False
-    Network = None  # type: ignore
 
 import plotly.express as px
 import plotly.graph_objects as go
+import networkx as nx  # type: ignore
 
-# ---- Import category modules ----
+# ---- Import your category runners (must be importable from this folder)
 from cat_1 import run_category1
 from cat_2 import run_category2
 from cat_3 import run_category3
@@ -37,18 +53,14 @@ from cat_10 import run_category10
 from cat_12 import run_category12
 from cat_13 import run_category13
 
-# ---- CONFIG ----
-# Detect correct data folder: trustscope/Objects/Domain Data/
-OBJECTS_DIR = Path(__file__).resolve().parents[1]
+# ---- CONFIG: resolve data at trustscope/Objects/Domain Data/ from Objects/Code/app.py
+OBJECTS_DIR = Path(__file__).resolve().parents[1]   # .../Objects
 CANDIDATE_DIRS = [
-    OBJECTS_DIR / "Domain Data",   # your actual folder
-    OBJECTS_DIR / "DomainData",    # fallback without space
-    OBJECTS_DIR / "domain data",   # lowercase fallback
+    OBJECTS_DIR / "Domain Data",   # canonical
+    OBJECTS_DIR / "DomainData",    # fallback
+    OBJECTS_DIR / "domain data",   # fallback
 ]
-
-INPUT_DIR = next((p for p in CANDIDATE_DIRS if p.exists()), None)
-if INPUT_DIR is None:
-    INPUT_DIR = OBJECTS_DIR / "data"  # fallback to dummy dir
+INPUT_DIR = next((p for p in CANDIDATE_DIRS if p.exists()), OBJECTS_DIR / "data")
 
 FILES = {
     "ous":        "nexora.local_ous.json",
@@ -258,45 +270,42 @@ else:
     SG = G.subgraph(nodes_to_keep).copy()
 
     # -------------------- Visualize Domain Graph --------------------
-    st.markdown("## 🌐 Domain Map")
-    st.caption("Drag nodes • Zoom with mouse wheel • Use sidebar filters to refine view")
+    # -------------------- Visualize Domain Graph --------------------
+st.markdown("## 🌐 Domain Map")
+st.caption("Drag nodes • Zoom with mouse wheel • Use sidebar filters to refine view")
 
-    if _PYVIS_AVAILABLE:
-        net = Network(
-            height="780px",
-            width="100%",
-            bgcolor="#0d1117",
-            font_color="#e6edf3",
-            directed=True,
-        )
+if _PYVIS_AVAILABLE:
+    net = Network(
+        height="780px",
+        width="100%",
+        bgcolor="#0d1117",
+        font_color="#e6edf3",
+        directed=True,
+    )
+    color_map = {
+        "Domain": "#3b82f6", "OU": "#22c55e", "Container": "#14b8a6",
+        "User": "#ef4444", "Group": "#f59e0b", "Computer": "#8b5cf6",
+        "DC": "#a855f7", "GPO": "#ec4899",
+    }
+    for n, a in SG.nodes(data=True):
+        ntype = a.get("type", "Node")
+        label = a.get("label", n)
+        size = 25 if (search_text and search_text.lower() in label.lower()) else 18
+        net.add_node(n, label=label, color=color_map.get(ntype, "#94a3b8"), size=size)
+    for u, v, a in SG.edges(data=True):
+        net.add_edge(u, v, title=a.get("relationship", "rel"))
+    net.show_buttons(filter_=["physics"])
+    html(net.generate_html(notebook=False), height=800, scrolling=True)
+else:
+    st.warning("PyVis not available. Add `pyvis` to requirements.txt for interactive graph. Showing edge list instead.")
+    import pandas as pd
+    st.dataframe(
+        pd.DataFrame(
+            [{"from": u, "to": v, "rel": a.get("relationship", "rel")} for u, v, a in SG.edges(data=True)]
+        ),
+        use_container_width=True,
+    )
 
-        color_map = {
-            "Domain": "#3b82f6", "OU": "#22c55e", "Container": "#14b8a6",
-            "User": "#ef4444", "Group": "#f59e0b", "Computer": "#8b5cf6",
-            "DC": "#a855f7", "GPO": "#ec4899",
-        }
-
-        for n, a in SG.nodes(data=True):
-            ntype = a.get("type", "Node")
-            label = a.get("label", n)
-            color = color_map.get(ntype, "#94a3b8")
-            size = 25 if search_text.lower() in label.lower() else 18 if search_text else 18
-            net.add_node(n, label=label, color=color, size=size)
-
-        for u, v, a in SG.edges(data=True):
-            net.add_edge(u, v, title=a.get("relationship", "rel"))
-
-        net.show_buttons(filter_=["physics"])
-        html_str = net.generate_html(notebook=False)
-        html(html_str, height=800, scrolling=True)
-    else:
-        st.warning("PyVis is not installed — showing a simple edge list instead.")
-        st.dataframe(
-            pd.DataFrame(
-                [{"from": u, "to": v, "rel": a.get("relationship", "rel")} for u, v, a in SG.edges(data=True)]
-            ),
-            use_container_width=True,
-        )
 
 # -------------------- Risk Analysis --------------------
 st.markdown("---")
@@ -328,3 +337,4 @@ if summaries:
     st.dataframe(df_summary, use_container_width=True)
 else:
     st.warning("No summary data found — check your JSON files in 'Objects/Domain Data' folder.")
+
