@@ -373,59 +373,7 @@ else:
 st.markdown("---")
 st.title("⚠️ Risk Assessment")
 
-# Run categories safely and collect
-error_rows = []
-reports, summaries = [], []
-raw_returns = []  # diagnostics
 
-category_specs = [
-    (run_category1,  "Password & Account Policy Checks"),
-    (run_category2,  "Optional Feature & Domain Configuration"),
-    (run_category3,  "Privileged Accounts & Group Membership"),
-    (run_category4,  "Administrator Account Restrictions – Workstations & Member Servers"),
-    (run_category6,  "Enterprise Admins Group Restrictions"),
-    (run_category7,  "Domain Controller & Service Health"),
-    (run_category9,  "Account & Audit Monitoring"),
-    (run_category10, "Group Policy & Security Settings"),
-    (run_category12, "Computer & Domain Management"),
-    (run_category13, "Privilege & Trust Management"),
-]
-
-for cat_func, title in category_specs:
-    try:
-        returned = cat_func(INPUT_DIR)
-        raw_returns.append({"Category": title, "Returned": str(type(returned)), "Preview": str(returned)[:300]})
-        if not (isinstance(returned, tuple) and len(returned) == 2):
-            raise ValueError("Category did not return (report_text, summary_dict) tuple")
-        report_text, summary = returned
-    except Exception as e:
-        msg = f"{e.__class__.__name__}: {e}"
-        report_text, summary = f"Error in {title}: {msg}", {"Category": title, "RiskScore": 0, "TotalFails": 0}
-        error_rows.append({"Category": title, "Error": msg})
-    reports.append((title, (report_text or "").strip()))
-
-    base = {"Category": title, "High": 0, "Medium": 0, "Low": 0, "Unknown": 0, "TotalFails": 0, "RiskScore": 0, "MaxScore": 0}
-    if isinstance(summary, dict):
-        for k in base.keys():
-            if k in summary:
-                base[k] = summary[k]
-    summaries.append(base)
-
-with st.expander("🔎 Diagnostics: Category returns (open if charts look wrong)"):
-    if error_rows:
-        st.error("Some categories raised errors.")
-        st.dataframe(pd.DataFrame(error_rows), use_container_width=True)
-    st.caption("Raw tuples returned by run_categoryX functions (first 300 chars shown).")
-    st.dataframe(pd.DataFrame(raw_returns), use_container_width=True)
-
-if summaries:
-    df_summary = pd.DataFrame(summaries)
-    # numeric coercion
-    for col in ["High", "Medium", "Low", "Unknown", "TotalFails", "RiskScore", "MaxScore"]:
-        df_summary[col] = pd.to_numeric(df_summary[col], errors="coerce").fillna(0)
-
-    st.subheader("📈 Category Summaries")
-    st.dataframe(df_summary, use_container_width=True)
 
     # KPIs
     EXPECTED_TOTAL_CHECKS = 120
@@ -632,3 +580,4 @@ Dive in if for the details of what’s really happening in your Domain, or just 
             st.code(text or "(no details)", language="text")
 else:
     st.warning("No summary data found — check JSON files and category functions.")
+
