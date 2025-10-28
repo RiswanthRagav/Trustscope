@@ -99,6 +99,11 @@ def dn_parent(dn: str) -> str:
         return ""
     return dn.split(",", 1)[1]
 
+# NEW: shortener for mobile axis labels
+def _shorten(s: str, n: int = 22) -> str:
+    s = str(s)
+    return s if len(s) <= n else s[: n - 1] + "…"
+
 # ==================== DOMAIN NAME ====================
 domains_file = INPUT_DIR / FILES["domains"]
 domain_name = "Unknown Domain"
@@ -145,6 +150,9 @@ level_sep    = st.sidebar.slider("Level separation", 100, 500, 220)
 node_dist    = st.sidebar.slider("Node distance", 50, 400, 180)
 search_text  = st.sidebar.text_input("Highlight nodes containing...", "")
 build_btn    = st.sidebar.button("Build / Refresh graph")
+
+# NEW: Mobile chart mode toggle
+mobile_mode = st.sidebar.checkbox("📱 Mobile-friendly charts", value=True)
 
 # ==================== LOAD ALL DATA ====================
 def load_all(dir_path: Path):
@@ -532,20 +540,79 @@ if summaries:
     else:
         st.info("Radar chart omitted because RiskScore values are all zero.")
 
-    # Bar: Severity Breakdown
+    # ==================== Bar: Severity Breakdown (MOBILE-FRIENDLY) ====================
     st.subheader("📊 Severity Breakdown")
     available_sev = [c for c in ["High", "Medium", "Low"] if c in df_summary.columns]
     if available_sev:
         df_melt = df_summary.melt(
-            id_vars="Category", value_vars=available_sev,
-            var_name="Severity", value_name="Count"
+            id_vars="Category",
+            value_vars=available_sev,
+            var_name="Severity",
+            value_name="Count"
+        ).copy()
+
+        # Short label for axis, keep full for hover
+        df_melt["CategoryShort"] = df_melt["Category"].apply(_shorten)
+
+        if mobile_mode:
+            # Horizontal bars work best on phones
+            cat_count = df_melt["Category"].nunique()
+            height = max(380, 26 * cat_count + 160)
+
+            fig = px.bar(
+                df_melt,
+                y="CategoryShort",
+                x="Count",
+                color="Severity",
+                orientation="h",
+                text="Count",
+                title="Failed Checks by Category & Severity"
+            )
+            fig.update_layout(
+                height=height,
+                margin=dict(l=10, r=10, t=50, b=10),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                yaxis=dict(automargin=True, title=None),
+                xaxis=dict(title=None, tickfont=dict(size=10)),
+                uniformtext_minsize=10, uniformtext_mode="hide"
+            )
+            fig.update_traces(
+                textposition="outside",
+                cliponaxis=False,
+                hovertemplate="<b>%{customdata[0]}</b><br>Severity: %{customdata[1]}<br>Count: %{x}<extra></extra>",
+                customdata=df_melt[["Category", "Severity"]].to_numpy()
+            )
+        else:
+            # Desktop default (vertical)
+            fig = px.bar(
+                df_melt,
+                x="CategoryShort",
+                y="Count",
+                color="Severity",
+                barmode="group",
+                text="Count",
+                title="Failed Checks by Category & Severity"
+            )
+            fig.update_layout(
+                xaxis_tickangle=-30,
+                margin=dict(l=10, r=10, t=50, b=10),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                xaxis_title=None,
+                yaxis_title=None,
+                uniformtext_minsize=10, uniformtext_mode="hide"
+            )
+            fig.update_traces(
+                textposition="outside",
+                cliponaxis=False,
+                hovertemplate="<b>%{customdata[0]}</b><br>Severity: %{customdata[1]}<br>Count: %{y}<extra></extra>",
+                customdata=df_melt[["Category", "Severity"]].to_numpy()
+            )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={"responsive": True, "displayModeBar": False}
         )
-        fig = px.bar(
-            df_melt, x="Category", y="Count", color="Severity",
-            barmode="group", text="Count", title="Failed Checks by Category & Severity"
-        )
-        fig.update_layout(xaxis_tickangle=-30)
-        st.plotly_chart(fig, use_container_width=True, key="severity_chart_main")
     else:
         st.info("No severity columns to chart.")
 
@@ -565,4 +632,3 @@ Dive in if for the details of what’s really happening in your Domain, or just 
             st.code(text or "(no details)", language="text")
 else:
     st.warning("No summary data found — check JSON files and category functions.")
-
