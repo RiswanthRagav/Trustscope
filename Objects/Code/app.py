@@ -73,7 +73,9 @@ st.markdown(
     - 🌐 **Domain Map** – A family tree of your AD  
     - ⚠️ **Risk Scores** – Quantified misconfigurations  
     - 📊 **Category Insights** – Spot the troublemakers  
-    - 💡 **What-if Scenarios** – Simulate remediation impact  
+    - 💡 **What-if Scenarios** – Simulate remediation impact
+    Use this dashboard to **hunt misconfigurations, expose attack paths, and keep attackers from having a field day**.  
+    Basically: *your AD’s dirty laundry, neatly folded and color-coded*. 🧺 
     """
 )
 
@@ -553,10 +555,14 @@ if summaries:
     st.dataframe(df_summary[cols], use_container_width=True, key="threat_posture_table_main")
 
     # Detailed reports
-    st.subheader("📂 Detailed Reports")
+    st.subheader("""📂 Detailed Reports
+    Here’s where the detective work pays off! 🕵️‍♂️
+Each expandable report uncovers the behind-the-scenes checks that shaped your risk score – from weak passwords and oversized admin groups to those sneaky GPO mischiefs. 
+Dive in if for the details of what’s really happening in your Domain, or just peek when you’re ready to face the truth.""")
     st.caption("Each section shows the checks behind the score for that category.")
     for title, text in reports:
         with st.expander(title, expanded=False):
             st.code(text or "(no details)", language="text")
 else:
     st.warning("No summary data found — check JSON files and category functions.")
+
