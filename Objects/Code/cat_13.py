@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
-# Category 13 – Privilege & Trust Management (Runtime Report)
-# Refined checks for:
-#  - Authentication policy silos misconfigured
-#  - Trust accounts for delegation misused
-#  - GPO folder/file rights misconfigured
-# Plus: registry rights, container control delegations, Se* privileges, RBAC, DNS create rights, constrained delegation
+# cat_13.py — Privilege & Trust Management (import-safe)
+from __future__ import annotations
 
 import os, json, re
-from typing import Any, Dict, List, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Tuple, Optional
 from collections import Counter, defaultdict
 
-# ======== CONFIG ========
-INPUT_DIR       = r"C:\Users\LENOVO\OneDrive\Desktop\dissertation\Nexora.local"  # change if needed
+# Filenames expected inside input_dir
 CONTAINERS_FILE = "nexora.local_containers.json"
 USERS_FILE      = "nexora.local_users.json"
 GROUPS_FILE     = "nexora.local_groups.json"
@@ -60,158 +56,124 @@ CHECK_META = {
     "gpo_folder_file_rights_misconf":{"title":"Group policy folder/file rights misconfigured",        "severity":"High",   "score":40},
 }
 
-# ======== helpers ========
-def pjoin(*a): return os.path.join(*a)
+# ---------- helpers ----------
+def _resolve_dir(input_dir: str | os.PathLike | None) -> Path:
+    if input_dir:
+        p = Path(input_dir)
+        return p if p.is_dir() else p.parent
+    return Path(".").resolve()
 
-def load_json_list(path: str) -> List[Dict[str, Any]]:
-    if not os.path.exists(path): return []
-    with open(path, "r", encoding="utf-8-sig") as f:
+def _load_json_list(path: Path) -> List[Dict[str, Any]]:
+    if not path.exists(): return []
+    with path.open("r", encoding="utf-8-sig") as f:
         data = json.load(f)
-    if isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
+    if isinstance(data, dict) and isinstance(data.get("data"), list):
         return data["data"]
-    if isinstance(data, list): return data
-    return []
+    return data if isinstance(data, list) else []
 
-def prop(d: Dict[str, Any], key: str, default=None):
-    return (d.get("Properties") or {}).get(key, default)
+def _prop(d: Dict[str, Any] | None, key: str, default=None):
+    return (d.get("Properties") or {}).get(key, default) if isinstance(d, dict) else default
 
-def any_text(s) -> str:
+def _any_text(s) -> str:
     return (s or "").strip()
 
-def match_any_token(s: str, tokens: List[str]) -> bool:
+def _match_any_token(s: str, tokens: List[str]) -> bool:
     ls = s.lower()
     return any(tok in ls for tok in tokens)
 
-def match_sid_patterns(s: str, patterns: List[str]) -> bool:
+def _match_sid_patterns(s: str, patterns: List[str]) -> bool:
     for pat in patterns:
         if re.search(pat, s, flags=re.IGNORECASE):
             return True
     return False
 
-def principal_is_admin(principal: str) -> bool:
-    if match_any_token(principal, ALLOWED_ADMIN_TOKENS): return True
-    if match_sid_patterns(principal, ADMIN_SID_PATTERNS): return True
-    return False
+def _principal_is_admin(principal: str) -> bool:
+    return _match_any_token(principal, ALLOWED_ADMIN_TOKENS) or _match_sid_patterns(principal, ADMIN_SID_PATTERNS)
 
-def principal_is_risky(principal: str) -> bool:
-    if match_any_token(principal, RISKY_PRINCIPAL_TOKENS): return True
-    if match_sid_patterns(principal, RISKY_SID_PATTERNS): return True
-    return False
+def _principal_is_risky(principal: str) -> bool:
+    return _match_any_token(principal, RISKY_PRINCIPAL_TOKENS) or _match_sid_patterns(principal, RISKY_SID_PATTERNS)
 
-def collect_aces(objs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _collect_aces(objs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     out = []
     for o in objs:
-        for ace in o.get("Aces", []) or []:
+        for ace in (o.get("Aces") or []):
             out.append(ace)
     return out
 
-# ======== load data ========
-containers = load_json_list(pjoin(INPUT_DIR, CONTAINERS_FILE))
-users      = load_json_list(pjoin(INPUT_DIR, USERS_FILE))
-groups     = load_json_list(pjoin(INPUT_DIR, GROUPS_FILE))
-computers  = load_json_list(pjoin(INPUT_DIR, COMPUTERS_FILE))
-gpos       = load_json_list(pjoin(INPUT_DIR, GPOS_FILE))
-domains    = load_json_list(pjoin(INPUT_DIR, DOMAINS_FILE))
-
-gpo_aces       = collect_aces(gpos)
-container_aces = collect_aces(containers)
-
-# ======== checks ========
-def check_registry_rights_misconfig() -> Tuple[str, List[Dict[str,str]]]:
-    """Flag if registry-related rights in GPOs/containers are granted to risky principals."""
-    hits = []
-    seen = False
-    for ace in (gpo_aces + container_aces):
-        rn = any_text(ace.get("RightName",""))
-        pr = any_text(ace.get("PrincipalSID") or ace.get("PrincipalName") or "")
-        if "registry" in rn.lower():
-            seen = True
-            if principal_is_risky(pr):
-                hits.append({"Object":"Registry Right", "Detail": f"{rn} granted to {pr}"})
-    if not seen:
-        return ("UNKNOWN", [])
-    return ("FAIL", hits) if hits else ("PASS", [])
-
-def check_container_delegations_insecure() -> Tuple[str, List[Dict[str,str]]]:
-    """Flag GenericAll/GenericWrite/WriteOwner/WriteDacl on containers by non-admins."""
-    dangerous = {"genericall","genericwrite","writeowner","writedacl","writeproperty"}
-    hits = []
-    seen = False
-    for cont in containers:
-        name = prop(cont, "name", "<container>")
-        for ace in cont.get("Aces", []) or []:
-            rn = any_text(ace.get("RightName",""))
-            pr = any_text(ace.get("PrincipalSID") or ace.get("PrincipalName") or "")
-            if rn and rn.lower() in dangerous:
-                seen = True
-                if not principal_is_admin(pr):
-                    hits.append({"Object": name, "Detail": f"{rn} granted to {pr}"})
-    if not seen:
-        return ("UNKNOWN", [])
-    return ("FAIL", hits) if hits else ("PASS", [])
-
-def check_privilege_rights_excessive() -> Tuple[str, List[Dict[str,str]]]:
-    """Flag Se*Privilege granted to risky principals (domain/group ACEs)."""
-    hits = []
-    seen = False
-    scan_objs = domains + groups
-    for obj in scan_objs:
-        objname = prop(obj, "name", "<object>")
-        for ace in obj.get("Aces", []) or []:
-            rn = any_text(ace.get("RightName",""))
-            pr = any_text(ace.get("PrincipalSID") or ace.get("PrincipalName") or "")
-            if rn.startswith("Se") and rn.endswith("Privilege"):
-                seen = True
-                if principal_is_risky(pr) and not principal_is_admin(pr):
-                    hits.append({"Object": objname, "Detail": f"{rn} assigned to {pr}"})
-    if not seen:
-        return ("UNKNOWN", [])
-    return ("FAIL", hits) if hits else ("PASS", [])
-
-def check_auth_policy_silos_misconfig() -> Tuple[str, List[Dict[str,str]]]:
-    """
-    Heuristic:
-      - If there are admin users (admincount=True) and NONE have AuthenticationPolicySilo -> FAIL.
-      - If at least one admin has a silo -> PASS.
-      - If there are no admin users in data -> UNKNOWN.
-    """
-    admins = [u for u in users if bool(prop(u,"admincount", False))]
-    if not admins:
-        return ("UNKNOWN", [])
-    admins_with_silo = [prop(u,"name","<user>") for u in admins if any_text(prop(u,"AuthenticationPolicySilo"))]
-    if admins_with_silo:
-        return ("PASS", [])
-    return ("FAIL", [{"Object":"Users","Detail":"Admin users present but no AuthenticationPolicySilo assigned"}])
-
 def _get_trust_field(trust: Dict[str,Any], key: str):
-    # case-insensitive getter for common trust fields
     for k,v in trust.items():
         if k.lower() == key.lower():
             return v
     return None
 
-def check_trust_accounts_misused() -> Tuple[str, List[Dict[str,str]]]:
-    """
-    Heuristic for misuse:
-      - Trust is External/Forest (or any) AND (SelectiveAuthentication is False/0/No OR SID filtering disabled)
-      - Direction is inbound or bidirectional
-    If no trust data -> UNKNOWN
-    """
+# ---------- check functions (pure; fed via closure from run_category13) ----------
+def _check_registry_rights_misconfig(gpo_aces, container_aces) -> Tuple[str, List[Dict[str,str]]]:
+    hits, seen = [], False
+    for ace in (gpo_aces + container_aces):
+        rn = _any_text(ace.get("RightName",""))
+        pr = _any_text(ace.get("PrincipalSID") or ace.get("PrincipalName") or "")
+        if "registry" in rn.lower():
+            seen = True
+            if _principal_is_risky(pr):
+                hits.append({"Object":"Registry Right", "Detail": f"{rn} granted to {pr}"})
+    if not seen:
+        return ("UNKNOWN", [])
+    return ("FAIL", hits) if hits else ("PASS", [])
+
+def _check_container_delegations_insecure(containers) -> Tuple[str, List[Dict[str,str]]]:
+    dangerous = {"genericall","genericwrite","writeowner","writedacl","writeproperty","write","modify"}
+    hits, seen = [], False
+    for cont in containers:
+        name = _prop(cont, "name", "<container>")
+        for ace in (cont.get("Aces") or []):
+            rn = _any_text(ace.get("RightName",""))
+            pr = _any_text(ace.get("PrincipalSID") or ace.get("PrincipalName") or "")
+            if rn and rn.lower() in dangerous:
+                seen = True
+                if not _principal_is_admin(pr):
+                    hits.append({"Object": name, "Detail": f"{rn} granted to {pr}"})
+    if not seen:
+        return ("UNKNOWN", [])
+    return ("FAIL", hits) if hits else ("PASS", [])
+
+def _check_privilege_rights_excessive(domains, groups) -> Tuple[str, List[Dict[str,str]]]:
+    hits, seen = [], False
+    for obj in (domains + groups):
+        objname = _prop(obj, "name", "<object>")
+        for ace in (obj.get("Aces") or []):
+            rn = _any_text(ace.get("RightName",""))
+            pr = _any_text(ace.get("PrincipalSID") or ace.get("PrincipalName") or "")
+            if rn.startswith("Se") and rn.endswith("Privilege"):
+                seen = True
+                if _principal_is_risky(pr) and not _principal_is_admin(pr):
+                    hits.append({"Object": objname, "Detail": f"{rn} assigned to {pr}"})
+    if not seen:
+        return ("UNKNOWN", [])
+    return ("FAIL", hits) if hits else ("PASS", [])
+
+def _check_auth_policy_silos_misconfig(users) -> Tuple[str, List[Dict[str,str]]]:
+    admins = [u for u in users if bool(_prop(u,"admincount", False))]
+    if not admins:
+        return ("UNKNOWN", [])
+    admins_with_silo = [_prop(u,"name","<user>") for u in admins if _any_text(_prop(u,"AuthenticationPolicySilo"))]
+    if admins_with_silo:
+        return ("PASS", [])
+    return ("FAIL", [{"Object":"Users","Detail":"Admin users present but no AuthenticationPolicySilo assigned"}])
+
+def _check_trust_accounts_misused(domains) -> Tuple[str, List[Dict[str,str]]]:
     trusts = []
     for d in domains:
-        trusts.extend(d.get("Trusts", []) or [])
+        trusts.extend(d.get("Trusts") or [])
     if not trusts:
         return ("UNKNOWN", [])
-
     hits = []
     for t in trusts:
-        tname = (_get_trust_field(t,"TrustingName") or _get_trust_field(t,"TrustedName") or prop(t,"name","<trust>"))
+        tname = (_get_trust_field(t,"TrustingName") or _get_trust_field(t,"TrustedName") or _prop(t,"name","<trust>"))
         ttype = str(_get_trust_field(t,"TrustType") or "").lower()
         tdir  = str(_get_trust_field(t,"TrustDirection") or "").lower()
         sel   = _get_trust_field(t,"SelectiveAuthentication")
         sidf  = _get_trust_field(t,"SIDFilteringEnabled")
 
-        # normalize booleans (True/False/"true"/1)
         def to_bool(x):
             if isinstance(x, bool): return x
             s = str(x).strip().lower()
@@ -219,51 +181,35 @@ def check_trust_accounts_misused() -> Tuple[str, List[Dict[str,str]]]:
             if s in ("false","0","no","disabled"): return False
             return None
 
-        sel_b  = to_bool(sel)
-        sidf_b = to_bool(sidf)
-
+        sel_b, sidf_b = to_bool(sel), to_bool(sidf)
         direction_risky = (tdir in ("two-way","bidirectional","both","inbound"))
         type_risky = True if not ttype else ("external" in ttype or "forest" in ttype or "realm" in ttype or "parent" in ttype)
-
-        # Any explicit disablement of selective auth or SID filtering is risky
-        selective_bad = (sel_b is False)
-        sidfilter_bad = (sidf_b is False)
-
-        if direction_risky and type_risky and (selective_bad or sidfilter_bad):
+        if direction_risky and type_risky and ((sel_b is False) or (sidf_b is False)):
             reason = []
-            if selective_bad: reason.append("SelectiveAuthentication=Disabled")
-            if sidfilter_bad: reason.append("SIDFilteringEnabled=Disabled")
+            if sel_b is False: reason.append("SelectiveAuthentication=Disabled")
+            if sidf_b is False: reason.append("SIDFilteringEnabled=Disabled")
             hits.append({"Object": tname or "<trust>", "Detail": f"Type={ttype or 'unknown'}, Direction={tdir or 'unknown'}; " + ", ".join(reason)})
-
     return ("FAIL", hits) if hits else ("PASS", [])
 
-def check_rbac_misconfigured() -> Tuple[str, List[Dict[str,str]]]:
-    """
-    If any computer explicitly has RBAC flag and it's False -> FAIL for that computer.
-    If at least one has RBAC=True and none False -> PASS.
-    If no computer has an explicit RBAC flag -> UNKNOWN.
-    """
-    any_flag = False
-    bad = []
+def _check_rbac_misconfigured(computers) -> Tuple[str, List[Dict[str,str]]]:
+    any_flag, bad = False, []
     for c in computers:
-        name = prop(c,"name","<computer>")
+        name = _prop(c,"name","<computer>")
         if "rbac" in (c.get("Properties") or {}):
             any_flag = True
-            if not bool(prop(c,"rbac")):
+            if not bool(_prop(c,"rbac")):
                 bad.append({"Object": name, "Detail":"RBAC=False"})
     if not any_flag:
         return ("UNKNOWN", [])
     return ("FAIL", bad) if bad else ("PASS", [])
 
-def check_dns_create_unauthorized() -> Tuple[str, List[Dict[str,str]]]:
-    """Flag users who have ACE 'Create DNS Record' (or similar). Unknown if no ACEs present anywhere."""
-    seen_any_aces = False
-    bad = []
+def _check_dns_create_unauthorized(users) -> Tuple[str, List[Dict[str,str]]]:
+    seen_any_aces, bad = False, []
     for u in users:
-        uname = prop(u,"name","<user>")
-        for ace in u.get("Aces", []) or []:
+        uname = _prop(u,"name","<user>")
+        for ace in (u.get("Aces") or []):
             seen_any_aces = True
-            rn = any_text(ace.get("RightName",""))
+            rn = _any_text(ace.get("RightName",""))
             if "create dns record" in rn.lower():
                 bad.append({"Object": uname, "Detail": f"{rn}"})
                 break
@@ -271,154 +217,67 @@ def check_dns_create_unauthorized() -> Tuple[str, List[Dict[str,str]]]:
         return ("UNKNOWN", [])
     return ("FAIL", bad) if bad else ("PASS", [])
 
-def check_constrained_delegation_issues() -> Tuple[str, List[Dict[str,str]]]:
-    """
-    Heuristic:
-      - If a computer has msDS-AllowedToDelegateTo (non-empty) -> flag (potential risk)
-      - If TrustedToAuthForDelegation is True -> flag (protocol transition)
-    UNKNOWN if no computers expose any of these attributes.
-    """
-    saw_attr = False
-    hits = []
+def _check_constrained_delegation_issues(computers) -> Tuple[str, List[Dict[str,str]]]:
+    saw_attr, hits = False, []
     for c in computers:
-        name = prop(c,"name","<computer>")
+        name = _prop(c,"name","<computer>")
         props = c.get("Properties") or {}
         atd = props.get("msds-allowedtodelegateto") or props.get("msDS-AllowedToDelegateTo")
         t2a = props.get("trustedtoauthfordelegation") or props.get("TrustedToAuthForDelegation")
         cdel= props.get("constraineddelegation") or props.get("ConstrainedDelegation")
-
         if atd is not None or t2a is not None or cdel is not None:
             saw_attr = True
-
         details = []
         if atd: details.append(f"AllowedToDelegateTo count={len(atd) if isinstance(atd,list) else 1}")
         if t2a: details.append("TrustedToAuthForDelegation=True")
         if cdel: details.append("ConstrainedDelegation=True")
-
         if details:
             hits.append({"Object": name, "Detail": ", ".join(details)})
-
     if not saw_attr:
         return ("UNKNOWN", [])
     return ("FAIL", hits) if hits else ("PASS", [])
 
-def check_gpo_folder_file_rights_misconf() -> Tuple[str, List[Dict[str,str]]]:
-    """
-    Flag suspicious write/modify rights on GPO objects assigned to non-admin principals.
-    We look for rights like: GenericAll, GenericWrite, WriteDacl, WriteOwner, Write, Modify.
-    UNKNOWN if there are no GPO ACEs.
-    """
-    if not gpo_aces:
-        return ("UNKNOWN", [])
+def _check_gpo_folder_file_rights_misconf(gpos) -> Tuple[str, List[Dict[str,str]]]:
     suspicious = {"genericall","genericwrite","writedacl","writeowner","write","modify","writeproperty","addmember"}
     hits = []
+    any_aces = any(g.get("Aces") for g in gpos)
+    if not any_aces:
+        return ("UNKNOWN", [])
     for g in gpos:
-        gname = prop(g,"name","<GPO>")
-        for ace in g.get("Aces", []) or []:
-            rn = any_text(ace.get("RightName",""))
-            pr = any_text(ace.get("PrincipalSID") or ace.get("PrincipalName") or "")
-            if rn and rn.lower() in suspicious and not principal_is_admin(pr):
+        gname = _prop(g,"name","<GPO>")
+        for ace in (g.get("Aces") or []):
+            rn = _any_text(ace.get("RightName",""))
+            pr = _any_text(ace.get("PrincipalSID") or ace.get("PrincipalName") or "")
+            if rn and rn.lower() in suspicious and not _principal_is_admin(pr):
                 hits.append({"Object": gname, "Detail": f"{rn} granted to {pr}"})
     return ("FAIL", hits) if hits else ("PASS", [])
 
-# ======== run & report ========
-CHECKS = [
-    ("registry_rights_misconfig",     check_registry_rights_misconfig),
-    ("container_delegations_insecure",check_container_delegations_insecure),
-    ("privilege_rights_excessive",    check_privilege_rights_excessive),
-    ("auth_policy_silos_misconfig",   check_auth_policy_silos_misconfig),
-    ("trust_accounts_misused",        check_trust_accounts_misused),
-    ("rbac_misconfigured",            check_rbac_misconfigured),
-    ("dns_create_unauthorized",       check_dns_create_unauthorized),
-    ("constrained_delegation_issues", check_constrained_delegation_issues),
-    ("gpo_folder_file_rights_misconf",check_gpo_folder_file_rights_misconf),
-]
+# ---------- public API ----------
+def run_category13(input_dir: str | os.PathLike | None) -> Tuple[str, Dict[str, Any]]:
+    base = _resolve_dir(input_dir)
 
-def main():
-    results: List[Dict[str, Any]] = []
-    failed_by_sev: Dict[str, List[Dict[str, Any]]] = {"High": [], "Medium": [], "Low": []}
+    containers = _load_json_list(base / CONTAINERS_FILE)
+    users      = _load_json_list(base / USERS_FILE)
+    groups     = _load_json_list(base / GROUPS_FILE)
+    computers  = _load_json_list(base / COMPUTERS_FILE)
+    gpos       = _load_json_list(base / GPOS_FILE)
+    domains    = _load_json_list(base / DOMAINS_FILE)
 
-    for key, fn in CHECKS:
-        status, details = fn()
-        meta = CHECK_META[key]
-        rec = {
-            "key": key,
-            "title": meta["title"],
-            "severity": meta["severity"],
-            "score": meta["score"],
-            "status": status,                 # PASS / FAIL / UNKNOWN
-            "fail_items": len(details),
-            "details": details,
-        }
-        results.append(rec)
-        if status == "FAIL":
-            failed_by_sev[meta["severity"]].append(rec)
+    gpo_aces       = _collect_aces(gpos)
+    container_aces = _collect_aces(containers)
 
-    # ===== summary =====
-    total         = len(results)
-    failed_total  = sum(1 for r in results if r["status"] == "FAIL")
-    unknown_total = sum(1 for r in results if r["status"] == "UNKNOWN")
+    CHECKS = [
+        ("registry_rights_misconfig",     lambda: _check_registry_rights_misconfig(gpo_aces, container_aces)),
+        ("container_delegations_insecure",lambda: _check_container_delegations_insecure(containers)),
+        ("privilege_rights_excessive",    lambda: _check_privilege_rights_excessive(domains, groups)),
+        ("auth_policy_silos_misconfig",   lambda: _check_auth_policy_silos_misconfig(users)),
+        ("trust_accounts_misused",        lambda: _check_trust_accounts_misused(domains)),
+        ("rbac_misconfigured",            lambda: _check_rbac_misconfigured(computers)),
+        ("dns_create_unauthorized",       lambda: _check_dns_create_unauthorized(users)),
+        ("constrained_delegation_issues", lambda: _check_constrained_delegation_issues(computers)),
+        ("gpo_folder_file_rights_misconf",lambda: _check_gpo_folder_file_rights_misconf(gpos)),
+    ]
 
-    by_sev_counts = Counter()
-    for r in results:
-        if r["status"] == "FAIL":
-            by_sev_counts[r["severity"]] += 1
-
-    category_risk_total = sum(r["score"] for r in results if r["status"] == "FAIL")
-    risk_by_severity = defaultdict(int)
-    for r in results:
-        if r["status"] == "FAIL":
-            risk_by_severity[r["severity"]] += r["score"]
-
-    print("\n=== Category 13: Privilege & Trust Management (Runtime Report) ===")
-    print(f"Checks evaluated: {total}")
-    print(f"FAILED: {failed_total} | UNKNOWN: {unknown_total}")
-    print(f"Category 13 Total Risk Score: {category_risk_total}")
-    print(f"  - High risk points:   {risk_by_severity['High']}")
-    print(f"  - Medium risk points: {risk_by_severity['Medium']}")
-    print(f"  - Low risk points:    {risk_by_severity['Low']}\n")
-
-    print("Failures by severity:")
-    print(f"  High  : {by_sev_counts.get('High', 0)}")
-    print(f"  Medium: {by_sev_counts.get('Medium', 0)}")
-    print(f"  Low   : {by_sev_counts.get('Low', 0)}\n")
-
-    def print_failed_block(sev: str, max_details: int = PRINT_MAX_DETAILS):
-        items = failed_by_sev.get(sev, [])
-        if not items:
-            print(f"{sev}: (none)")
-            return
-        print(f"{sev}:")
-        for r in items:
-            print(f"  - {r['title']}  (Score {r['score']})  -> {r['fail_items']} item(s)")
-            details = r["details"]
-            if max_details and len(details) > max_details:
-                for d in details[:max_details]:
-                    print(f"      • {d.get('Object')} - {d.get('Detail')}")
-                print(f"      ... and {len(details)-max_details} more")
-            else:
-                for d in details:
-                    print(f"      • {d.get('Object')} - {d.get('Detail')}")
-        print()
-
-    print_failed_block("High")
-    print_failed_block("Medium")
-    print_failed_block("Low")
-
-    print("Non-passing (UNKNOWN) checks:")
-    for r in results:
-        if r["status"] == "UNKNOWN":
-            print(f"  - {r['title']} ({r['severity']}, Score {r['score']}) -> needs additional data")
-    print()
-
-if __name__ == "__main__":
-    main()
-
-def run_category13(input_dir: str):
-    """
-    Wrapper for Category 13: Privilege & Trust Management
-    Returns (report_text, summary_dict)
-    """
     results: List[Dict[str, Any]] = []
     failed_by_sev: Dict[str, List[Dict[str, Any]]] = {"High": [], "Medium": [], "Low": []}
     unknown_items: List[Dict[str, Any]] = []
@@ -436,25 +295,23 @@ def run_category13(input_dir: str):
             "details": details,
         }
         results.append(rec)
+        if status == "FAIL":
+            failed_by_sev[meta["severity"]].append(rec)
+        if status == "UNKNOWN":
+            unknown_items.append(rec)
 
-        if status in ("FAIL", "UNKNOWN"):
-            failed_by_sev.setdefault(meta["severity"], []).append(rec)
-            if status == "UNKNOWN":
-                unknown_items.append(rec)
-
-    # ===== summary =====
     total         = len(results)
     failed_total  = sum(1 for r in results if r["status"] == "FAIL")
     unknown_total = len(unknown_items)
+    category_risk_total = sum(r["score"] for r in results if r["status"] in ("FAIL","UNKNOWN"))
 
-    category_risk_total = sum(r["score"] for r in results if r["status"] in ("FAIL", "UNKNOWN"))
     risk_by_severity = {"High":0, "Medium":0, "Low":0}
     for r in results:
-        if r["status"] in ("FAIL", "UNKNOWN"):
+        if r["status"] in ("FAIL","UNKNOWN"):
             risk_by_severity[r["severity"]] += r["score"]
 
-    # ===== build report text =====
-    lines = []
+    # Build report text
+    lines: List[str] = []
     lines.append("=== Category 13: Privilege & Trust Management (Runtime Report) ===")
     lines.append(f"Checks evaluated: {total}")
     lines.append(f"FAILED: {failed_total} | UNKNOWN: {unknown_total}")
@@ -487,7 +344,6 @@ def run_category13(input_dir: str):
 
     report_text = "\n".join(lines)
 
-    # ===== summary for Streamlit =====
     summary = {
         "High": len(failed_by_sev["High"]),
         "Medium": len(failed_by_sev["Medium"]),
@@ -496,5 +352,10 @@ def run_category13(input_dir: str):
         "Unknown": unknown_total,
         "RiskScore": category_risk_total,
     }
-
     return report_text, summary
+
+# Optional: quick CLI test (uses current working directory)
+if __name__ == "__main__":
+    txt, summ = run_category13(None)
+    print(txt)
+    print("\nSummary:", summ)
