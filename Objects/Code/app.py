@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# app.py — Streamlit Cloud–ready (repo-relative data path + robust charts)
+# app.py — Streamlit Cloud–ready (repo-relative data path + restored local features)
 
 from __future__ import annotations
 import json
@@ -11,7 +11,6 @@ from streamlit.components.v1 import html
 import pandas as pd
 
 # ---- Third-party libs ----
-# Expect these in requirements.txt: streamlit, pandas, networkx, pyvis, plotly
 import plotly.express as px
 import plotly.graph_objects as go
 
@@ -27,7 +26,7 @@ try:
 except Exception:
     _PYVIS_AVAILABLE = False
 
-# ---- Import category runners (these must be in the same folder as app.py) ----
+# ---- Import category runners (same folder as app.py) ----
 from cat_1 import run_category1
 from cat_2 import run_category2
 from cat_3 import run_category3
@@ -132,7 +131,7 @@ show_domain    = st.sidebar.checkbox("Domain", True)
 show_ou        = st.sidebar.checkbox("OU", True)
 show_container = st.sidebar.checkbox("Container", False)
 show_user      = st.sidebar.checkbox("User", False)
-show_group     = st.sidebar.checkbox("Group", False)
+show_group     = st.sidebar.checkbox("Group", False)  # default False as per local
 show_computer  = st.sidebar.checkbox("Computer", True)
 show_gpo       = st.sidebar.checkbox("GPO", True)
 
@@ -160,6 +159,48 @@ if build_btn or "graph_built" not in st.session_state:
 data = st.session_state["data"]
 ous, users, groups = data["ous"], data["users"], data["groups"]
 computers, domains, gpos, containers = data["computers"], data["domains"], data["gpos"], data["containers"]
+
+# ==================== “OVERVIEW” KPI CARDS (restored) ====================
+st.markdown("## 📊 Overview")
+
+if "toggles" not in st.session_state:
+    st.session_state.toggles = {
+        "Domains": False,
+        "Users": False,
+        "Groups": False,
+        "Computers": False,
+        "OUs": False,
+        "GPOs": False,
+    }
+
+def kpi_card(col, icon, label, value, items, key_name="name"):
+    with col:
+        if st.button(f"{icon}\n{value}\n{label}", key=f"btn_{label}", use_container_width=True):
+            st.session_state.toggles[label] = not st.session_state.toggles[label]
+
+        if st.session_state.toggles[label]:
+            clean_list = [(obj.get("Properties") or {}).get(key_name, str(obj)) for obj in items]
+            list_html = "".join(
+                f"<div style='padding:2px 0; white-space:normal; word-wrap:break-word;' title='{val}'>{val}</div>"
+                for val in clean_list
+            )
+            st.markdown(
+                f"""
+                <div style='background:#1e293b;color:#f1f5f9;padding:10px;border-radius:10px;margin-top:8px;
+                            text-align:left;font-size:13px;line-height:1.4;'>
+                    {list_html}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+col1, col2, col3, col4, col5, col6 = st.columns(6)
+kpi_card(col1, "🌐", "Domains",   len(domains),   domains)
+kpi_card(col2, "👥", "Users",     len(users),     users)
+kpi_card(col3, "📂", "Groups",    len(groups),    groups)
+kpi_card(col4, "🖥️", "Computers", len(computers), computers)
+kpi_card(col5, "🏢", "OUs",       len(ous),       ous)
+kpi_card(col6, "📜", "GPOs",      len(gpos),      gpos)
 
 # ==================== BUILD GRAPH ====================
 G = nx.DiGraph()
@@ -257,6 +298,15 @@ if _PYVIS_AVAILABLE:
         notebook=False,
         directed=True
     )
+    options = {
+        "nodes": {"shape": "dot", "size": 18, "font": {"size": 14}},
+        "edges": {"arrows": {"to": {"enabled": True}}, "smooth": {"type": "dynamic"}},
+        "physics": {"enabled": use_physics, "barnesHut": {"springLength": node_dist}},
+        "layout": {"hierarchical": {"enabled": hierarchical, "levelSeparation": level_sep, "direction": "LR"}},
+        "interaction": {"hover": True, "dragNodes": True, "navigationButtons": True, "keyboard": True}
+    }
+    net.set_options(json.dumps(options))
+
     color_map = {
         "Domain":   "#3b82f6",
         "OU":       "#22c55e",
@@ -267,22 +317,40 @@ if _PYVIS_AVAILABLE:
         "DC":       "#a855f7",
         "GPO":      "#ec4899",
     }
+
     for n, a in SG.nodes(data=True):
         ntype = a.get("type", "Node")
         label = a.get("label", n)
-        size = 28 if (search_text and search_text.lower() in label.lower()) else 20
-        net.add_node(n, label=label, color=color_map.get(ntype, "#94a3b8"), size=size)
+
+        title = f"""
+        <div style='padding:4px;font-size:13px;color:#f1f5f9;'>
+            <b>{label}</b><br>
+            <span style='color:#cbd5e1;'>Type:</span> {ntype}<br>
+            <span style='color:#94a3b8;'>DN:</span> {n[:200]}{'...' if len(n)>200 else ''}
+        </div>
+        """
+
+        if search_text and search_text.lower() in label.lower():
+            color = {
+                "background": "#facc15",
+                "border": "#fef08a",
+                "highlight": {"background": "#fde047", "border": "#facc15"}
+            }
+            size = 28
+        else:
+            base = color_map.get(ntype, "#94a3b8")
+            color = {
+                "background": base,
+                "border": "#e2e8f0",
+                "highlight": {"background": base, "border": "#f9fafb"}
+            }
+            size = 20
+
+        net.add_node(n, label=label, title=title, color=color, size=size, borderWidth=2)
+
     for u, v, a in SG.edges(data=True):
         net.add_edge(u, v, title=a.get("relationship", "rel"))
-    # physics options
-    options = {
-        "nodes": {"shape": "dot", "font": {"size": 14}},
-        "edges": {"arrows": {"to": {"enabled": True}}, "smooth": {"type": "dynamic"}},
-        "physics": {"enabled": use_physics, "barnesHut": {"springLength": node_dist}},
-        "layout": {"hierarchical": {"enabled": hierarchical, "levelSeparation": level_sep, "direction": "LR"}},
-        "interaction": {"hover": True, "dragNodes": True, "navigationButtons": True, "keyboard": True}
-    }
-    net.set_options(json.dumps(options))
+
     html(net.generate_html(notebook=False), height=800, scrolling=True)
 else:
     st.warning("PyVis not available. Install `pyvis` for interactive graph. Showing edges table instead.")
@@ -298,7 +366,7 @@ st.title("⚠️ Risk Assessment")
 # Run categories safely and collect
 error_rows = []
 reports, summaries = [], []
-raw_returns = []  # <- for diagnostics: keep exact tuples returned
+raw_returns = []  # diagnostics
 
 category_specs = [
     (run_category1,  "Password & Account Policy Checks"),
@@ -315,7 +383,7 @@ category_specs = [
 
 for cat_func, title in category_specs:
     try:
-        returned = cat_func(INPUT_DIR)  # categories must use this input_dir internally
+        returned = cat_func(INPUT_DIR)
         raw_returns.append({"Category": title, "Returned": str(type(returned)), "Preview": str(returned)[:300]})
         if not (isinstance(returned, tuple) and len(returned) == 2):
             raise ValueError("Category did not return (report_text, summary_dict) tuple")
@@ -326,19 +394,13 @@ for cat_func, title in category_specs:
         error_rows.append({"Category": title, "Error": msg})
     reports.append((title, (report_text or "").strip()))
 
-    # normalise summary to consistent numeric columns so charts don't break
-    base = {
-        "Category": title,
-        "High": 0, "Medium": 0, "Low": 0,
-        "Unknown": 0, "TotalFails": 0, "RiskScore": 0, "MaxScore": 0
-    }
+    base = {"Category": title, "High": 0, "Medium": 0, "Low": 0, "Unknown": 0, "TotalFails": 0, "RiskScore": 0, "MaxScore": 0}
     if isinstance(summary, dict):
         for k in base.keys():
             if k in summary:
                 base[k] = summary[k]
     summaries.append(base)
 
-# === Diagnostics: see what the categories returned (super helpful on Cloud) ===
 with st.expander("🔎 Diagnostics: Category returns (open if charts look wrong)"):
     if error_rows:
         st.error("Some categories raised errors.")
@@ -346,10 +408,9 @@ with st.expander("🔎 Diagnostics: Category returns (open if charts look wrong)
     st.caption("Raw tuples returned by run_categoryX functions (first 300 chars shown).")
     st.dataframe(pd.DataFrame(raw_returns), use_container_width=True)
 
-# === If we have summaries, build charts ===
 if summaries:
     df_summary = pd.DataFrame(summaries)
-    # coerce numeric columns
+    # numeric coercion
     for col in ["High", "Medium", "Low", "Unknown", "TotalFails", "RiskScore", "MaxScore"]:
         df_summary[col] = pd.to_numeric(df_summary[col], errors="coerce").fillna(0)
 
@@ -362,24 +423,17 @@ if summaries:
     total_unknowns  = int(df_summary["Unknown"].sum())
     overall_risk_sum = float(df_summary["RiskScore"].sum())
     total_max_score = float(df_summary["MaxScore"].sum())
-
     has_maxscore_col = total_max_score > 0
 
-    # Detect “no data” condition (all zeros across key fields)
-    no_data = (
-        len(df_summary) == 0 or
-        (overall_risk_sum == 0 and total_fails == 0 and total_unknowns == 0)
-    )
+    no_data = (len(df_summary) == 0 or (overall_risk_sum == 0 and total_fails == 0 and total_unknowns == 0))
 
     if has_maxscore_col:
-        # Weighted risk percentage
         overall_pct = round((overall_risk_sum / max(1.0, total_max_score)) * 100, 2)
         gauge_value = 0.0 if no_data else overall_pct
         gauge_suffix = "%"
         gauge_title = "Overall Weighted Risk (0–100%)"
         gauge_range = [0, 100]
     else:
-        # Fall back: failure-rate percentage
         failure_rate = (total_fails + total_unknowns) / max(1, EXPECTED_TOTAL_CHECKS)
         overall_pct = round(failure_rate * 100, 2)
         gauge_value = 0.0 if no_data else overall_pct
@@ -387,7 +441,7 @@ if summaries:
         gauge_title = "Overall Failure Rate (0–100%)"
         gauge_range = [0, 100]
 
-    # Also show the raw sum so you can see “actual” points even when we display %
+    # Global overview cards
     st.subheader("📊 Global Overview Metrics")
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
     kpi1.metric("Total Checks (ref.)", EXPECTED_TOTAL_CHECKS)
@@ -395,7 +449,7 @@ if summaries:
     kpi3.metric("Overall Risk (%)", f"{overall_pct}%")
     kpi4.metric("Raw Risk Sum", int(overall_risk_sum))
 
-    # Update the single sidebar gauge slot
+    # Update sidebar gauge
     gauge_fig = go.Figure(go.Indicator(
         mode="gauge+number",
         value=gauge_value,
@@ -416,23 +470,22 @@ if summaries:
         st.sidebar.info("No category data detected — check inputs or open Diagnostics below.")
     gauge_slot.plotly_chart(gauge_fig, use_container_width=True)
 
-    # Most critical category (by risk sum)
+    # Most critical category
     if len(df_summary) and (df_summary["RiskScore"] > 0).any():
         critical_row = df_summary.loc[df_summary["RiskScore"].idxmax()]
         critical_cat = str(critical_row["Category"])
         critical_score = float(critical_row["RiskScore"])
     else:
         critical_cat, critical_score = "N/A", 0
-
     st.metric("Most Critical Category", critical_cat, f"Score {int(critical_score)}")
 
-    # What-if Scenarios
+    # What-if Scenarios (restored narrative style)
     st.subheader("💡 What-if Scenarios")
     if (df_summary["RiskScore"] > 0).any():
         df_sorted = df_summary.sort_values("RiskScore", ascending=False).head(3).copy()
+        narratives = []
+        new_overall = overall_pct
         if has_maxscore_col:
-            new_overall = overall_pct
-            narratives = []
             for _, row in df_sorted.iterrows():
                 cat = row["Category"]
                 score = float(row["RiskScore"])
@@ -442,9 +495,6 @@ if summaries:
                     f"- **{cat}** remediation could reduce weighted risk by ~{reduction_pct}% → **{new_overall}%**."
                 )
         else:
-            # fallback based on failure counts
-            new_overall = overall_pct
-            narratives = []
             for _, row in df_sorted.iterrows():
                 cat = row["Category"]
                 fail_count = int(row["TotalFails"])
@@ -461,7 +511,7 @@ if summaries:
     st.markdown("---")
 
     # Radar
-    st.subheader("🕸️ Threat Posture (Radar)")
+    st.subheader("🕸️ Category Comparison")
     if (df_summary["RiskScore"] > 0).any():
         radar_fig = go.Figure()
         radar_fig.add_trace(go.Scatterpolar(
