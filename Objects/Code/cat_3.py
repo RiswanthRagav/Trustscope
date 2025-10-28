@@ -1,5 +1,6 @@
-# cat_3.py — Privileged Accounts & Group Membership (safe for Streamlit import)
+# cat_3.py — Privileged Accounts & Group Membership (cloud-safe path resolution)
 from __future__ import annotations
+
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Set, Optional
 from datetime import datetime, timezone, timedelta
@@ -7,48 +8,66 @@ import json
 from collections import Counter, defaultdict
 
 # ========= Risk model (Category 3) =========
-# High Risks
-# 1.  Accounts vulnerable to Kerberoasting (100)
-# 2.  Accounts vulnerable to ASRepRoasting (80)
-# 3.  Privileged groups contain undesired members (80)
-# 4.  Admin accounts can be delegated (80)
-# 5.  Accounts in Schema Admins (80)
-# 6.  Users in Privesc group (80)
-# 7.  Admin “Sensitive & Cannot be Delegated” disabled (80)
-# 8.  Admin Smart card not required (64)
-# 9.  Admin accounts not in Protected Users group (64)
-# 10. Native Administrator account used recently (64)
-# Medium Risks
-# 1.  Privileged users not set to defaults (48)  -> UNKNOWN (needs ACL baseline)
-# 2.  Pre-Windows 2000 Access group members (48)
-# Low Risks
-# 1.  Accounts that had admin rights in the past (36) -> UNKNOWN (needs history)
-# 2.  GMSA misconfigurations (36) -> UNKNOWN (needs policy/ACLs)
-
 CHECK_META = {
     # High
-    "kerberoastable":       {"title": "Accounts vulnerable to Kerberoasting",                       "severity": "High",   "score": 100},
-    "asreproastable":       {"title": "Accounts vulnerable to ASRepRoasting",                       "severity": "High",   "score": 80},
-    "priv_groups_undesired":{"title": "Privileged groups contain undesired members",                "severity": "High",   "score": 80},
-    "admin_can_be_delegated":{"title": "Admin accounts can be delegated",                           "severity": "High",   "score": 80},
-    "in_schema_admins":     {"title": "Accounts in Schema Admins",                                   "severity": "High",   "score": 80},
-    "users_in_privesc":     {"title": "Users in Privesc group",                                      "severity": "High",   "score": 80},
-    "admin_not_sensitive":  {"title": "Admin 'Sensitive & Cannot be Delegated' disabled",            "severity": "High",   "score": 80},
-    "admin_no_smartcard":   {"title": "Admin Smart card not required",                               "severity": "High",   "score": 64},
-    "admins_not_protected": {"title": "Admin accounts not in Protected Users group",                 "severity": "High",   "score": 64},
-    "builtin_admin_used":   {"title": "Native Administrator account used recently",                  "severity": "High",   "score": 64},
+    "kerberoastable":        {"title": "Accounts vulnerable to Kerberoasting",                       "severity": "High",   "score": 100},
+    "asreproastable":        {"title": "Accounts vulnerable to ASRepRoasting",                       "severity": "High",   "score": 80},
+    "priv_groups_undesired": {"title": "Privileged groups contain undesired members",                "severity": "High",   "score": 80},
+    "admin_can_be_delegated":{"title": "Admin accounts can be delegated",                            "severity": "High",   "score": 80},
+    "in_schema_admins":      {"title": "Accounts in Schema Admins",                                  "severity": "High",   "score": 80},
+    "users_in_privesc":      {"title": "Users in Privesc group",                                     "severity": "High",   "score": 80},
+    "admin_not_sensitive":   {"title": "Admin 'Sensitive & Cannot be Delegated' disabled",           "severity": "High",   "score": 80},
+    "admin_no_smartcard":    {"title": "Admin Smart card not required",                              "severity": "High",   "score": 64},
+    "admins_not_protected":  {"title": "Admin accounts not in Protected Users group",                "severity": "High",   "score": 64},
+    "builtin_admin_used":    {"title": "Native Administrator account used recently",                 "severity": "High",   "score": 64},
     # Medium
-    "priv_users_not_default":{"title": "Privileged users not set to defaults",                      "severity": "Medium", "score": 48},
-    "pre2k_members":        {"title": "Pre-Windows 2000 Compatible Access group members",           "severity": "Medium", "score": 48},
+    "priv_users_not_default":{"title": "Privileged users not set to defaults",                       "severity": "Medium", "score": 48},
+    "pre2k_members":         {"title": "Pre-Windows 2000 Compatible Access group members",           "severity": "Medium", "score": 48},
     # Low
-    "had_admin_before":     {"title": "Accounts that had admin rights in the past",                 "severity": "Low",    "score": 36},
-    "gmsa_misconfig":       {"title": "GMSA misconfigurations",                                     "severity": "Low",    "score": 36},
+    "had_admin_before":      {"title": "Accounts that had admin rights in the past",                 "severity": "Low",    "score": 36},
+    "gmsa_misconfig":        {"title": "GMSA misconfigurations",                                     "severity": "Low",    "score": 36},
 }
 
 # Tunables
 ADMIN_RECENT_DAYS = 90
 
-# ========= helpers (no top-level I/O) =========
+# ========= filenames we expect =========
+USERS_FILE   = "nexora.local_users.json"
+GROUPS_FILE  = "nexora.local_groups.json"
+
+# ========= path helpers (no top-level I/O) =========
+def _resolve_input_dir_prefer_domain_data(base_hint: Optional[str | Path]) -> Path:
+    """
+    Resolve the folder that contains the JSON dumps.
+    Priority:
+      1) If base_hint is a folder that exists -> use it.
+      2) If base_hint is a file -> use its parent.
+      3) Resolve relative to this file: .../Objects/Domain Data (and fallbacks).
+      4) Fallback to .../Objects/data if nothing else exists.
+    """
+    if base_hint:
+        p = Path(base_hint)
+        if p.is_dir():
+            return p
+        if p.is_file():
+            return p.parent
+
+    # This file is expected under .../Objects/Code/cat_3.py
+    code_dir = Path(__file__).resolve().parent
+    objects_dir = code_dir.parent  # .../Objects
+
+    candidates = [
+        objects_dir / "Domain Data",
+        objects_dir / "DomainData",
+        objects_dir / "domain data",
+        objects_dir / "data",
+        objects_dir,
+    ]
+    for c in candidates:
+        if c.exists() and c.is_dir():
+            return c
+    return objects_dir  # last resort (may not exist; caller will handle)
+
 def _load_json_list(path: Path) -> List[Dict[str, Any]]:
     if not path.exists():
         return []
@@ -72,9 +91,9 @@ def _group_member_sids(group_obj: Dict[str, Any] | None) -> List[str]:
     return [m.get("ObjectIdentifier") for m in (group_obj.get("Members") or []) if isinstance(m, dict)]
 
 def _find_group_by_sam(groups: List[Dict[str, Any]], sam: str) -> Dict[str, Any] | None:
-    sam = sam.lower()
+    s = sam.lower()
     for g in groups:
-        if (_prop(g, "samaccountname", "") or "").lower() == sam:
+        if (_prop(g, "samaccountname", "") or "").lower() == s:
             return g
     return None
 
@@ -92,7 +111,6 @@ def _filetime_to_datetime(v) -> datetime | None:
             return datetime.fromtimestamp(iv, tz=timezone.utc)
     except Exception:
         pass
-    # Try ISO8601
     try:
         return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
     except Exception:
@@ -100,18 +118,33 @@ def _filetime_to_datetime(v) -> datetime | None:
 
 # ========= main callable (safe to import) =========
 def run_category3(
-    input_dir: str | Path,
+    input_dir: str | Path | None,
     desired_members_sids: Optional[Set[str]] = None
 ) -> Tuple[str, Dict[str, Any]]:
     """
     Privileged Accounts & Group Membership
-    - Loads JSON from `input_dir` (expects nexora.local_users.json and nexora.local_groups.json)
-    - desired_members_sids: optional baseline of allowed SIDs for DA/EA/SA (enables 'priv_groups_undesired')
+
+    - Robustly resolves `input_dir` (defaults to .../Objects/Domain Data and fallbacks).
+    - Loads `nexora.local_users.json` and `nexora.local_groups.json`.
+    - desired_members_sids: optional baseline of allowed SIDs for DA/EA/SA (enables 'priv_groups_undesired').
+
     Returns: (report_text, summary_dict)
     """
-    base = Path(input_dir)
-    users_path  = base / "nexora.local_users.json"
-    groups_path = base / "nexora.local_groups.json"
+    base = _resolve_input_dir_prefer_domain_data(input_dir)
+
+    # Try canonical filenames first; if missing, try looser matches
+    users_path  = base / USERS_FILE
+    groups_path = base / GROUPS_FILE
+
+    if not users_path.exists():
+        # loose fallback: any *users*.json in the folder
+        alts = list(base.glob("*users*.json"))
+        if alts:
+            users_path = alts[0]
+    if not groups_path.exists():
+        alts = list(base.glob("*groups*.json"))
+        if alts:
+            groups_path = alts[0]
 
     users  = _load_json_list(users_path)
     groups = _load_json_list(groups_path)
@@ -211,9 +244,6 @@ def run_category3(
         return ("FAIL", pr_members) if pr_members else ("PASS", [])
 
     def check_admin_not_sensitive():
-        """
-        FAIL for any admin account (DA/EA/SA member) that is NOT 'sensitive' (ACCOUNT_NOT_DELEGATED).
-        """
         bad = []
         for sid in all_admin_sids:
             u = idx_users.get(sid)
@@ -224,9 +254,6 @@ def run_category3(
         return ("FAIL", bad) if bad else ("PASS", [])
 
     def check_admin_no_smartcard():
-        """
-        FAIL for any admin account that does NOT require smart card.
-        """
         bad = []
         for sid in all_admin_sids:
             u = idx_users.get(sid)
@@ -237,9 +264,6 @@ def run_category3(
         return ("FAIL", bad) if bad else ("PASS", [])
 
     def check_admins_not_in_protected_users():
-        """
-        FAIL for any admin (DA/EA/SA member) not in 'Protected Users'.
-        """
         if g_protected_users is None:
             return ("UNKNOWN", [{"Object":"Directory","Detail":"'Protected Users' group not found"}])
         bad = []
@@ -250,9 +274,6 @@ def run_category3(
         return ("FAIL", bad) if bad else ("PASS", [])
 
     def check_builtin_admin_used_recently():
-        """
-        FAIL if the built-in 'Administrator' has lastLogonTimestamp within ADMIN_RECENT_DAYS.
-        """
         admin_user = None
         for u in users:
             if (_prop(u, "samaccountname","") or "").lower() == "administrator":
@@ -273,7 +294,6 @@ def run_category3(
         return ("PASS", [])
 
     def check_priv_users_not_default():
-        # Needs explicit baseline of default ACLs/rights for each privileged account.
         return ("UNKNOWN", [{"Object":"Policy","Detail":"Needs baseline of default privileged user permissions/ACLs"}])
 
     def check_pre2k_members():
@@ -290,11 +310,9 @@ def run_category3(
         return ("FAIL", details)
 
     def check_had_admin_before():
-        # Historical question; without change history, mark UNKNOWN.
         return ("UNKNOWN", [{"Object":"Directory","Detail":"Needs historical admin-rights evidence (change logs)"}])
 
     def check_gmsa_misconfig():
-        # Requires policy/ACL evaluation on gMSA usage; mark UNKNOWN.
         return ("UNKNOWN", [{"Object":"Policy","Detail":"Needs gMSA policy/ACL evaluation beyond current JSON"}])
 
     CHECKS = [
@@ -317,7 +335,7 @@ def run_category3(
         ("gmsa_misconfig",         check_gmsa_misconfig),          # UNKNOWN
     ]
 
-    # ========= execute checks (no prints; return text blob) =========
+    # ========= execute checks =========
     results: List[Dict[str, Any]] = []
     failed_by_sev: Dict[str, List[Dict[str, Any]]] = {"High": [], "Medium": [], "Low": []}
 
