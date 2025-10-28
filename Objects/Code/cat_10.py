@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-import os, json
-from typing import Any, Dict, List
-from collections import Counter, defaultdict
+# cat_10.py — GPO & Security Settings (auto path + import-safe)
+from __future__ import annotations
 
-# ========= CONFIG =========
-INPUT_DIR = r"C:\Users\LENOVO\OneDrive\Desktop\dissertation\Nexora.local"
-GPO_FILE  = "nexora.local_gpos.json"
+import os, json
+from pathlib import Path
+from typing import Any, Dict, List, Tuple, Optional
+from collections import Counter, defaultdict
 
 PRINT_MAX_DETAILS = 10
 
@@ -43,8 +43,11 @@ CHECK_META = {
     "wsh_enabled":           {"title":"Windows Script Host not disabled","severity":"Low","score":27},
 }
 
-# ========= registry map =========
-REGISTRY_MAP = {
+GPO_FILE = "nexora.local_gpos.json"
+
+# registry setting map:
+#   key -> (full_reg_path_substring_to_match, secure_value, fail_if_equal)
+REGISTRY_MAP: Dict[str, Tuple[Any, Any, bool]] = {
     # High
     "firewall_disabled":     ("HKLM\\Software\\Policies\\Microsoft\\WindowsFirewall\\DomainProfile\\EnableFirewall", 1, True),
     "wdigest_enabled":       ("HKLM\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\WDigest\\UseLogonCredential", 0, True),
@@ -63,7 +66,7 @@ REGISTRY_MAP = {
     "uac_insecure":          ("HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\\ConsentPromptBehaviorAdmin", 2, True),
     "wpad_enabled":          ("HKLM\\Software\\Policies\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\\EnableAutoproxyResultCache", 0, True),
     "amsi_missing":          ("HKLM\\SOFTWARE\\Microsoft\\AMSI\\Enable", 1, True),
-    "applocker_missing":     ("HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\SrpV2", None, True),
+    "applocker_missing":     ("HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\SrpV2", None, True),  # presence check
     "ps_events_not_logged":  ("HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging", 1, True),
     "ps_not_restricted":     ("HKLM\\SOFTWARE\\Microsoft\\PowerShell\\1\\ShellIds\\Microsoft.PowerShell\\ExecutionPolicy", "AllSigned", True),
 
@@ -77,69 +80,152 @@ REGISTRY_MAP = {
     "wsh_enabled":           ("HKLM\\Software\\Microsoft\\Windows Script Host\\Settings\\Enabled", 0, True),
 }
 
+# ========= Path resolver =========
+def _resolve_input_dir_prefer_domain_data(base_hint: Optional[str | Path]) -> Path:
+    """
+    Resolve the folder that contains your Nexora JSONs.
+    Priority:
+      1) base_hint (if provided and exists)
+      2) .../Objects/Domain Data (and variants)
+      3) .../Objects/data, then .../Objects
+    """
+    if base_hint:
+        p = Path(base_hint)
+        if p.is_dir():  return p
+        if p.is_file(): return p.parent
+
+    code_dir = Path(__file__).resolve().parent      # .../Objects/Code
+    objects_dir = code_dir.parent                   # .../Objects
+
+    for c in [
+        objects_dir / "Domain Data",
+        objects_dir / "DomainData",
+        objects_dir / "domain data",
+        objects_dir / "data",
+        objects_dir,
+    ]:
+        if c.exists() and c.is_dir():
+            return c
+    return objects_dir
+
 # ========= helpers =========
-def load_json(path: str) -> List[Dict[str, Any]]:
-    with open(path,"r",encoding="utf-8-sig") as f:
-        data=json.load(f)
-    if isinstance(data,dict) and "data" in data: return data["data"]
-    return data if isinstance(data,list) else []
+def _load_json_list(path: Path) -> List[Dict[str, Any]]:
+    if not path.exists():
+        return []
+    with path.open("r", encoding="utf-8-sig") as f:
+        data = json.load(f)
+    if isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
+        return data["data"]
+    return data if isinstance(data, list) else []
 
-def prop(d: Dict[str,Any], key: str, default=None):
-    return (d.get("Properties") or {}).get(key,default)
+def prop(d: Dict[str,Any] | None, key: str, default=None):
+    if not isinstance(d, dict):
+        return default
+    return (d.get("Properties") or {}).get(key, default)
 
-def eval_setting(gpos: List[Dict[str,Any]], reg_path: str, secure_value: Any, fail_if_equal=True):
+def _iter_registry_items(gpo_obj: Dict[str, Any]):
+    """
+    Yield (path, value) tuples for registry settings across common shapes:
+      - gpo["RegistrySettings"] : [{Key, ValueName, Data}, ...]
+      - gpo["Settings"]["Registry"] : [{Key, ValueName, Data}, ...]  (some export styles)
+    """
+    # 1) Direct RegistrySettings
+    for rs in gpo_obj.get("RegistrySettings", []) or []:
+        key = (rs.get("Key") or "").strip()
+        val_name = (rs.get("ValueName") or "").strip()
+        data = rs.get("Data")
+        if key or val_name:
+            yield (f"{key}\\{val_name}".strip("\\"), data)
+
+    # 2) Nested under Settings.Registry
+    settings = gpo_obj.get("Settings") or {}
+    for rs in (settings.get("Registry") or []):
+        key = (rs.get("Key") or "").strip()
+        val_name = (rs.get("ValueName") or "").strip()
+        data = rs.get("Data")
+        if key or val_name:
+            yield (f"{key}\\{val_name}".strip("\\"), data)
+
+def _eval_setting_for_gpos(gpos: List[Dict[str, Any]], reg_path: str, secure_value: Any, fail_if_equal: bool):
+    """
+    Search all registry entries; classify:
+      - secure_value is None -> PASS if any value present at that path (presence)
+      - fail_if_equal=True  -> PASS if value == secure_value, else FAIL
+      - fail_if_equal=False -> FAIL if value == secure_value, else PASS
+    If no matching path seen across all GPOs -> FAIL and mark as unknown=True (needs more data).
+    """
+    target = (reg_path or "").lower()
+    matched_any = False
+    findings: List[Dict[str, str]] = []
+
     for g in gpos:
-        reg_settings = g.get("RegistrySettings", [])
-        for rs in reg_settings:
-            path = (rs.get("Key","") + "\\" + rs.get("ValueName","")).lower()
-            if reg_path.lower() in path:
-                val = rs.get("Data")
-                if secure_value is None:  # presence check
-                    if val:
-                        return "PASS",[],False
-                    else:
-                        return "FAIL",[{"Object":prop(g,"name","<GPO>"),"Detail":"Missing"}],False
-                if fail_if_equal:
-                    return ("PASS",[],False) if val == secure_value else ("FAIL",[{"Object":prop(g,"name","<GPO>"),"Detail":f"{reg_path}={val}"}],False)
+        gname = prop(g, "name", "<GPO>")
+        for path, value in _iter_registry_items(g):
+            if target in (path or "").lower():
+                matched_any = True
+                if secure_value is None:
+                    # presence check
+                    if value is not None and value != "":
+                        return ("PASS", [], False)
+                    findings.append({"Object": gname, "Detail": f"Missing value at {reg_path}"})
                 else:
-                    return ("FAIL",[{"Object":prop(g,"name","<GPO>"),"Detail":f"{reg_path}={val}"}],False) if val == secure_value else ("PASS",[],False)
-    # no matching registry found → treat as UNKNOWN (FAIL)
-    return "FAIL",[{"Object":"N/A","Detail":f"{reg_path} not found"}],True
+                    if fail_if_equal:
+                        if value == secure_value:
+                            return ("PASS", [], False)
+                        findings.append({"Object": gname, "Detail": f"{reg_path}={value} (wanted {secure_value})"})
+                    else:
+                        if value == secure_value:
+                            return ("FAIL", [{"Object": gname, "Detail": f"{reg_path}={value} (disallowed)"}], False)
+                        else:
+                            return ("PASS", [], False)
 
-# ========= Wrapper for Streamlit =========
-def run_category10(input_dir: str):
-    gpos = load_json(os.path.join(input_dir, GPO_FILE))
+    if not matched_any:
+        return ("FAIL", [{"Object": "N/A", "Detail": f"{reg_path} not found in GPOs"}], True)
 
-    results=[]
-    failed_by_sev={"High":[],"Medium":[],"Low":[]}
-    unknown_items=[]
+    # matched but still not satisfied (e.g., presence check not met or value different)
+    return ("FAIL", findings or [{"Object": "N/A", "Detail": f"{reg_path} mismatch"}], False)
+
+# ========= Public API =========
+def run_category10(input_dir: str | Path | None) -> Tuple[str, Dict[str, Any]]:
+    """
+    Category 10: GPO & Security Settings
+    - Auto-resolves input_dir to .../Objects/Domain Data (with fallbacks)
+    - Looks for registry settings in multiple export shapes
+    Returns (report_text, summary_dict)
+    """
+    base = _resolve_input_dir_prefer_domain_data(input_dir)
+    gpos = _load_json_list(base / GPO_FILE)
+
+    results: List[Dict[str, Any]] = []
+    failed_by_sev = {"High": [], "Medium": [], "Low": []}
+    unknown_items: List[Dict[str, Any]] = []
 
     for key, meta in CHECK_META.items():
-        reg_path, secure_value, fail_if_equal = REGISTRY_MAP.get(key, (None,None,True))
-        status,details,is_unknown=eval_setting(gpos,reg_path,secure_value,fail_if_equal)
+        reg_path, secure_value, fail_if_equal = REGISTRY_MAP.get(key, (None, None, True))
+        status, details, is_unknown = _eval_setting_for_gpos(gpos, reg_path, secure_value, fail_if_equal)
 
-        rec={"key":key,"title":meta["title"],"severity":meta["severity"],
-             "score":meta["score"],"status":status,"fail_items":len(details),
-             "details":details}
+        rec = {
+            "key": key, "title": meta["title"], "severity": meta["severity"],
+            "score": meta["score"], "status": status, "fail_items": len(details), "details": details
+        }
         results.append(rec)
-
-        if status=="FAIL":
+        if status == "FAIL":
             failed_by_sev[meta["severity"]].append(rec)
         if is_unknown:
             unknown_items.append(rec)
 
-    total=len(results)
-    failed_total=sum(1 for r in results if r["status"]=="FAIL")
-    unknown_total=len(unknown_items)
-    category_risk_total=sum(r["score"] for r in results if r["status"]=="FAIL")
+    total = len(results)
+    failed_total = sum(1 for r in results if r["status"] == "FAIL")
+    unknown_total = len(unknown_items)
+    category_risk_total = sum(r["score"] for r in results if r["status"] == "FAIL")
 
-    risk_by_severity={"High":0,"Medium":0,"Low":0}
+    risk_by_severity = defaultdict(int)
     for r in results:
-        if r["status"]=="FAIL":
-            risk_by_severity[r["severity"]]+=r["score"]
+        if r["status"] == "FAIL":
+            risk_by_severity[r["severity"]] += r["score"]
 
-    # --- Build console text ---
-    lines=[]
+    # --- Build text report ---
+    lines: List[str] = []
     lines.append("=== Category 10: GPO & Security Settings (Runtime Report) ===")
     lines.append(f"Checks evaluated: {total}")
     lines.append(f"FAILED: {failed_total} | UNKNOWN: {unknown_total}")
@@ -148,9 +234,11 @@ def run_category10(input_dir: str):
     lines.append(f"  - Medium risk points: {risk_by_severity['Medium']}")
     lines.append(f"  - Low risk points:    {risk_by_severity['Low']}\n")
 
-    for sev in ["High","Medium","Low"]:
-        items=failed_by_sev[sev]
-        if not items: lines.append(f"{sev}: (none)"); continue
+    for sev in ["High", "Medium", "Low"]:
+        items = failed_by_sev[sev]
+        if not items:
+            lines.append(f"{sev}: (none)")
+            continue
         lines.append(f"{sev}:")
         for r in items:
             lines.append(f"  - {r['title']} (Score {r['score']}) -> {r['fail_items']} item(s)")
@@ -158,24 +246,25 @@ def run_category10(input_dir: str):
                 lines.append(f"      • {d.get('Object')} - {d.get('Detail')}")
         lines.append("")
 
-    lines.append("Non-passing (UNKNOWN) checks (counted as FAIL):")
+    lines.append("Non-passing (UNKNOWN) checks (counted separately):")
     for r in unknown_items:
         lines.append(f"  - {r['title']} ({r['severity']}, Score {r['score']}) -> additional data required")
 
-    report_text="\n".join(lines)
+    report_text = "\n".join(lines)
 
-    summary={
-        "High":len(failed_by_sev["High"]),
-        "Medium":len(failed_by_sev["Medium"]),
-        "Low":len(failed_by_sev["Low"]),
-        "TotalFails":failed_total,
-        "Unknown":unknown_total,
-        "RiskScore":category_risk_total,
+    summary = {
+        "High": len(failed_by_sev["High"]),
+        "Medium": len(failed_by_sev["Medium"]),
+        "Low": len(failed_by_sev["Low"]),
+        "TotalFails": failed_total,
+        "Unknown": unknown_total,
+        "RiskScore": category_risk_total,
     }
-
     return report_text, summary
 
-if __name__=="__main__":
-    text, summary = run_category10(INPUT_DIR)
+
+# ========= CLI test =========
+if __name__ == "__main__":
+    text, summary = run_category10(None)  # auto-locate Domain Data
     print(text)
     print(summary)
