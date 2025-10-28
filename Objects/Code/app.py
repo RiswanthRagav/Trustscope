@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-# app.py — Streamlit Cloud–ready (repo-relative data path + compact sidebar gauge, no category runs)
-
+# app.py — Streamlit Cloud–ready (repo-relative data path) with optional category analysis
 from __future__ import annotations
 import json
 from pathlib import Path
@@ -12,6 +11,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
+# ---------------- Third-party libs ----------------
 try:
     import networkx as nx
 except Exception as e:
@@ -24,7 +24,25 @@ try:
 except Exception:
     _PYVIS_AVAILABLE = False
 
+# ---- Optional category runners (guarded) ----
+_CATEGORY_AVAILABLE = True
+try:
+    from cat_1 import run_category1
+    from cat_2 import run_category2
+    from cat_3 import run_category3
+    from cat_4 import run_category4
+    from cat_6 import run_category6
+    from cat_7 import run_category7
+    from cat_9 import run_category9
+    from cat_10 import run_category10
+    from cat_12 import run_category12
+    from cat_13 import run_category13
+except Exception:
+    _CATEGORY_AVAILABLE = False
+
 # ==================== CONFIG: DATA PATH ====================
+# This file lives at: trustscope/Objects/Code/app.py
+# Your JSON lives at:  trustscope/Objects/Domain Data/
 OBJECTS_DIR = Path(__file__).resolve().parents[1]  # .../Objects
 CANDIDATE_DIRS = [
     OBJECTS_DIR / "Domain Data",   # canonical
@@ -55,9 +73,9 @@ st.markdown(
 
     What you’ll find here:  
     - 🌐 **Domain Map** – A family tree of your AD  
-    - ⚠️ **Risk Meter** – (static demo in this build)  
-    - 📊 **Category Insights** – *disabled in this build*  
-    - 💡 **What-if Scenarios** – *disabled in this build*
+    - ⚠️ **Risk Meter** – sidebar gauge (computed when analysis is enabled)  
+    - 📊 **Category Insights** – optional (toggle in sidebar)  
+    - 💡 **What-if Scenarios** – optional (toggle in sidebar)
     """
 )
 
@@ -101,7 +119,14 @@ st.title(f"DOMAIN – {domain_name.upper()}")
 # ==================== SIDEBAR ====================
 st.sidebar.header("Configuration")
 
-# Reserve a single sidebar slot for the gauge; we’ll update it below with a compact version
+# Toggle to enable/disable category analysis (off by default)
+enable_analysis = st.sidebar.checkbox(
+    "Enable category analysis",
+    value=False,
+    help="Run category checks and render risk charts. Leave off for fast/graph-only view."
+)
+
+# Reserve a single sidebar slot for the gauge; we’ll update it later
 gauge_slot = st.sidebar.empty()
 
 # Node toggles
@@ -123,7 +148,7 @@ node_dist    = st.sidebar.slider("Node distance", 50, 400, 180)
 search_text  = st.sidebar.text_input("Highlight nodes containing...", "")
 build_btn    = st.sidebar.button("Build / Refresh graph")
 
-# Mobile chart mode toggle (kept for future charts)
+# Mobile chart mode toggle
 mobile_mode = st.sidebar.checkbox("📱 Mobile-friendly charts", value=True)
 
 # ==================== LOAD ALL DATA ====================
@@ -331,15 +356,85 @@ else:
         use_container_width=True,
     )
 
-# ==================== RISK METER (COMPACT, STATIC) ====================
-# No category runs in this build — show a compact gauge placeholder that fits the sidebar
+# ==================== RISK METER + (OPTIONAL) RISK DASHBOARD ====================
+# Default values (no analysis yet)
+overall_pct = 0.0
+gauge_title = "Overall Risk"
+gauge_suffix = "%"
+gauge_range = [0, 100]
+
+df_summary = None
+reports = []
+
+if enable_analysis:
+    if not _CATEGORY_AVAILABLE:
+        st.warning("Category analysis requested, but the category modules (cat_*) were not found in this environment.")
+    else:
+        # ---- Run categories safely and collect summaries ----
+        error_rows = []
+        summaries = []
+        category_specs = [
+            (run_category1,  "Password & Account Policy Checks"),
+            (run_category2,  "Optional Feature & Domain Configuration"),
+            (run_category3,  "Privileged Accounts & Group Membership"),
+            (run_category4,  "Administrator Account Restrictions – Workstations & Member Servers"),
+            (run_category6,  "Enterprise Admins Group Restrictions"),
+            (run_category7,  "Domain Controller & Service Health"),
+            (run_category9,  "Account & Audit Monitoring"),
+            (run_category10, "Group Policy & Security Settings"),
+            (run_category12, "Computer & Domain Management"),
+            (run_category13, "Privilege & Trust Management"),
+        ]
+
+        for cat_func, title in category_specs:
+            try:
+                returned = cat_func(INPUT_DIR)
+                if not (isinstance(returned, tuple) and len(returned) == 2):
+                    raise ValueError("Category did not return (report_text, summary_dict) tuple")
+                report_text, summary = returned
+            except Exception as e:
+                msg = f"{e.__class__.__name__}: {e}"
+                report_text, summary = f"Error in {title}: {msg}", {"Category": title, "RiskScore": 0, "TotalFails": 0}
+                error_rows.append({"Category": title, "Error": msg})
+
+            reports.append((title, (report_text or "").strip()))
+
+            base = {"Category": title, "High": 0, "Medium": 0, "Low": 0, "Unknown": 0,
+                    "TotalFails": 0, "RiskScore": 0, "MaxScore": 0}
+            if isinstance(summary, dict):
+                for k in base.keys():
+                    if k in summary:
+                        base[k] = summary[k]
+            summaries.append(base)
+
+        if summaries:
+            df_summary = pd.DataFrame(summaries)
+            for col in ["High", "Medium", "Low", "Unknown", "TotalFails", "RiskScore", "MaxScore"]:
+                df_summary[col] = pd.to_numeric(df_summary[col], errors="coerce").fillna(0)
+
+            EXPECTED_TOTAL_CHECKS = 120
+            total_fails     = int(df_summary["TotalFails"].sum())
+            total_unknowns  = int(df_summary["Unknown"].sum())
+            overall_risk_sum = float(df_summary["RiskScore"].sum())
+            total_max_score = float(df_summary["MaxScore"].sum())
+            has_maxscore_col = total_max_score > 0
+
+            if has_maxscore_col:
+                overall_pct = round((overall_risk_sum / max(1.0, total_max_score)) * 100, 2)
+                gauge_title = "Overall Weighted Risk (0–100%)"
+            else:
+                failure_rate = (total_fails + total_unknowns) / max(1, EXPECTED_TOTAL_CHECKS)
+                overall_pct = round(failure_rate * 100, 2)
+                gauge_title = "Overall Failure Rate (0–100%)"
+
+# ---- Compact sidebar gauge (fits the side tab) ----
 compact_gauge = go.Figure(go.Indicator(
     mode="gauge+number",
-    value=0,  # static demo value
-    number={"suffix": "%", "font": {"size": 16}},          # smaller number font
-    title={"text": "Overall Risk", "font": {"size": 12}},  # smaller title
+    value=float(overall_pct),
+    number={"suffix": gauge_suffix, "font": {"size": 16}},         # compact number
+    title={"text": gauge_title, "font": {"size": 12}},             # compact title
     gauge={
-        "axis": {"range": [0, 100]},
+        "axis": {"range": gauge_range},
         "bar": {"color": "red"},
         "steps": [
             {"range": [0, 30], "color": "green"},
@@ -350,6 +445,155 @@ compact_gauge = go.Figure(go.Indicator(
 ))
 compact_gauge.update_layout(margin=dict(l=6, r=6, t=24, b=6), height=160)
 gauge_slot.plotly_chart(compact_gauge, use_container_width=True)
-st.sidebar.caption("Risk Meter is a static placeholder in this build. Enable category analysis to compute it.")
 
-# ==================== END ====================
+# ---- Risk Assessment visuals (only when analysis is enabled & df_summary exists) ----
+if enable_analysis and isinstance(df_summary, pd.DataFrame) and not df_summary.empty:
+    st.markdown("---")
+    st.title("⚠️ Risk Assessment")
+
+    # Category summaries table
+    st.subheader("📈 Category Summaries")
+    st.dataframe(df_summary, use_container_width=True)
+
+    # KPIs + most critical
+    EXPECTED_TOTAL_CHECKS = 120
+    total_fails    = int(df_summary["TotalFails"].sum())
+    total_unknowns = int(df_summary["Unknown"].sum())
+    overall_risk_sum = float(df_summary["RiskScore"].sum())
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Total Checks (ref.)", EXPECTED_TOTAL_CHECKS)
+    k2.metric("Total Failures", total_fails)
+    k3.metric("Overall Risk (%)", f"{overall_pct}%")
+    if (df_summary["RiskScore"] > 0).any():
+        critical_row = df_summary.loc[df_summary["RiskScore"].idxmax()]
+        critical_cat = str(critical_row["Category"])
+        critical_score = float(critical_row["RiskScore"])
+    else:
+        critical_cat, critical_score = "N/A", 0.0
+    k4.metric("Most Critical Category", critical_cat, f"Score {int(critical_score)}")
+
+    # What-if scenarios
+    st.subheader("💡 What-if Scenarios")
+    total_max_score = float(df_summary["MaxScore"].sum())
+    has_maxscore_col = total_max_score > 0
+    new_overall = overall_pct
+    narratives = []
+    df_sorted = df_summary.sort_values("RiskScore", ascending=False).head(3).copy()
+    for _, row in df_sorted.iterrows():
+        cat = row["Category"]
+        score = float(row["RiskScore"])
+        if has_maxscore_col:
+            reduction_pct = round((score / max(1.0, total_max_score)) * 100, 2)
+        else:
+            fail_count = int(row["TotalFails"])
+            reduction_pct = round((fail_count / max(1, EXPECTED_TOTAL_CHECKS)) * 100, 2)
+        new_overall = max(0, round(new_overall - reduction_pct, 2))
+        narratives.append(
+            f"- **{cat}** remediation could reduce risk by ~{reduction_pct}% → **{new_overall}%**."
+        )
+    if narratives:
+        st.markdown("\n".join(narratives))
+        st.info("Prioritise fixes in order of the biggest projected drop.")
+
+    st.markdown("---")
+
+    # Radar
+    st.subheader("🕸️ Category Comparison")
+    if (df_summary["RiskScore"] > 0).any():
+        radar_fig = go.Figure()
+        radar_fig.add_trace(go.Scatterpolar(
+            r=df_summary["RiskScore"],
+            theta=df_summary["Category"],
+            fill="toself",
+            name="Risk Score"
+        ))
+        max_r = max(10.0, float(df_summary["RiskScore"].max()) + 20.0)
+        radar_fig.update_layout(
+            polar=dict(radialaxis=dict(visible=True, range=[0, max_r])),
+            showlegend=False,
+            title="Risk Score by Category"
+        )
+        st.plotly_chart(radar_fig, use_container_width=True, key="radar_chart_main")
+    else:
+        st.info("Radar chart omitted because RiskScore values are all zero.")
+
+    # Severity Breakdown (mobile-friendly)
+    st.subheader("📊 Severity Breakdown")
+    available_sev = [c for c in ["High", "Medium", "Low"] if c in df_summary.columns]
+    if available_sev:
+        df_melt = df_summary.melt(
+            id_vars="Category",
+            value_vars=available_sev,
+            var_name="Severity",
+            value_name="Count"
+        ).copy()
+        df_melt["CategoryShort"] = df_melt["Category"].apply(_shorten)
+
+        if mobile_mode:
+            cat_count = df_melt["Category"].nunique()
+            height = max(380, 26 * cat_count + 160)
+            fig = px.bar(
+                df_melt,
+                y="CategoryShort",
+                x="Count",
+                color="Severity",
+                orientation="h",
+                text="Count",
+                title="Failed Checks by Category & Severity"
+            )
+            fig.update_layout(
+                height=height,
+                margin=dict(l=10, r=10, t=50, b=10),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                yaxis=dict(automargin=True, title=None),
+                xaxis=dict(title=None, tickfont=dict(size=10)),
+                uniformtext_minsize=10, uniformtext_mode="hide"
+            )
+            fig.update_traces(
+                textposition="outside",
+                cliponaxis=False,
+                hovertemplate="<b>%{customdata[0]}</b><br>Severity: %{customdata[1]}<br>Count: %{x}<extra></extra>",
+                customdata=df_melt[["Category", "Severity"]].to_numpy()
+            )
+        else:
+            fig = px.bar(
+                df_melt,
+                x="CategoryShort",
+                y="Count",
+                color="Severity",
+                barmode="group",
+                text="Count",
+                title="Failed Checks by Category & Severity"
+            )
+            fig.update_layout(
+                xaxis_tickangle=-30,
+                margin=dict(l=10, r=10, t=50, b=10),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                xaxis_title=None,
+                yaxis_title=None,
+                uniformtext_minsize=10, uniformtext_mode="hide"
+            )
+            fig.update_traces(
+                textposition="outside",
+                cliponaxis=False,
+                hovertemplate="<b>%{customdata[0]}</b><br>Severity: %{customdata[1]}<br>Count: %{y}<extra></extra>",
+                customdata=df_melt[["Category", "Severity"]].to_numpy()
+            )
+        st.plotly_chart(fig, use_container_width=True, config={"responsive": True, "displayModeBar": False})
+    else:
+        st.info("No severity columns to chart.")
+
+    # Table
+    st.subheader("📈 Threat Posture Briefing")
+    cols = [c for c in ["Category", "High", "Medium", "Low", "Unknown", "TotalFails", "RiskScore"] if c in df_summary.columns]
+    st.dataframe(df_summary[cols], use_container_width=True, key="threat_posture_table_main")
+
+    # Detailed reports
+    st.subheader("📂 Detailed Reports")
+    st.caption("Each section shows the checks behind the score for that category.")
+    for title, text in reports:
+        with st.expander(title, expanded=False):
+            st.code(text or "(no details)", language="text")
+else:
+    # Soft note when analysis is off
+    st.sidebar.caption("Risk Meter shows a placeholder until category analysis is enabled.")
