@@ -304,6 +304,8 @@ st.title("⚠️ Risk Assessment")
 # Run categories safely and collect
 error_rows = []
 reports, summaries = [], []
+raw_returns = []  # <- for diagnostics: keep exact tuples returned
+
 category_specs = [
     (run_category1,  "Password & Account Policy Checks"),
     (run_category2,  "Optional Feature & Domain Configuration"),
@@ -319,46 +321,56 @@ category_specs = [
 
 for cat_func, title in category_specs:
     try:
-        report_text, summary = cat_func(INPUT_DIR)  # expect category functions to use input_dir
+        returned = cat_func(INPUT_DIR)  # <- IMPORTANT: categories must actually use this input_dir
+        raw_returns.append({"Category": title, "Returned": str(type(returned)), "Preview": str(returned)[:300]})
+        if not (isinstance(returned, tuple) and len(returned) == 2):
+            raise ValueError("Category did not return (report_text, summary_dict) tuple")
+        report_text, summary = returned
     except Exception as e:
         msg = f"{e.__class__.__name__}: {e}"
         report_text, summary = f"Error in {title}: {msg}", {"Category": title, "RiskScore": 0, "TotalFails": 0}
         error_rows.append({"Category": title, "Error": msg})
-    reports.append((title, report_text))
-    # normalize summary to stable columns
-    base_summary = {
-        "Category": title, "High": 0, "Medium": 0, "Low": 0,
-        "Unknown": 0, "TotalFails": 0, "RiskScore": 0
+    reports.append((title, (report_text or "").strip()))
+
+    # normalise summary to consistent numeric columns so charts don't break
+    base = {
+        "Category": title,
+        "High": 0, "Medium": 0, "Low": 0,
+        "Unknown": 0, "TotalFails": 0, "RiskScore": 0, "MaxScore": 0
     }
     if isinstance(summary, dict):
-        base_summary.update(summary)
-    summaries.append(base_summary)
+        for k in base.keys():
+            if k in summary:
+                base[k] = summary[k]
+    summaries.append(base)
 
-if error_rows:
-    with st.expander("❗ Category errors (open for details)"):
+# === Diagnostics: see what the categories returned (super helpful on Cloud) ===
+with st.expander("🔎 Diagnostics: Category returns (open if charts look wrong)"):
+    if error_rows:
+        st.error("Some categories raised errors.")
         st.dataframe(pd.DataFrame(error_rows), use_container_width=True)
+    st.caption("Raw tuples returned by run_categoryX functions (first 300 chars shown).")
+    st.dataframe(pd.DataFrame(raw_returns), use_container_width=True)
 
+# === If we have summaries, build charts ===
 if summaries:
     df_summary = pd.DataFrame(summaries)
-
-    # Ensure columns exist & are numeric
+    # coerce numeric columns
     for col in ["High", "Medium", "Low", "Unknown", "TotalFails", "RiskScore", "MaxScore"]:
-        if col not in df_summary.columns:
-            df_summary[col] = 0
         df_summary[col] = pd.to_numeric(df_summary[col], errors="coerce").fillna(0)
 
     st.subheader("📈 Category Summaries")
     st.dataframe(df_summary, use_container_width=True)
 
     # KPIs
-    EXPECTED_TOTAL_CHECKS = 120  # fallback if MaxScore is not provided by categories
-    total_fails = int(df_summary["TotalFails"].sum())
+    EXPECTED_TOTAL_CHECKS = 120
+    total_fails    = int(df_summary["TotalFails"].sum())
     total_unknowns = int(df_summary["Unknown"].sum())
     overall_risk_raw = float(df_summary["RiskScore"].sum())
 
-    has_maxscore_col = (df_summary["MaxScore"].fillna(0).sum() > 0)
+    has_maxscore_col = (df_summary["MaxScore"].sum() > 0)
     if has_maxscore_col:
-        total_max_score = float(df_summary["MaxScore"].fillna(0).sum())
+        total_max_score = float(df_summary["MaxScore"].sum())
         overall_score_pct = round((overall_risk_raw / max(1.0, total_max_score)) * 100, 2)
         gauge_title = "Overall Weighted Risk (0–100%)"
     else:
@@ -366,7 +378,7 @@ if summaries:
         overall_score_pct = round(failure_rate * 100, 2)
         gauge_title = "Overall Failure Rate (0–100%)"
 
-    if len(df_summary):
+    if len(df_summary) and (df_summary["RiskScore"] > 0).any():
         critical_row = df_summary.loc[df_summary["RiskScore"].idxmax()]
         critical_cat = str(critical_row["Category"])
         critical_score = float(critical_row["RiskScore"])
@@ -380,15 +392,15 @@ if summaries:
     kpi3.metric("Overall Risk Score", f"{overall_score_pct}%")
     kpi4.metric("Most Critical Category", critical_cat, f"Score {int(critical_score)}")
 
-    # Update sidebar gauge with the computed value
+    # Update sidebar gauge
     with st.sidebar:
         gauge_fig_sidebar = go.Figure(go.Indicator(
             mode="gauge+number",
-            value=overall_score_pct,
-            number={"suffix": "%"},
+            value=overall_risk_raw if has_maxscore_col else overall_score_pct,
+            number={"suffix": "%" if not has_maxscore_col else ""},
             title={"text": gauge_title},
             gauge={
-                "axis": {"range": [0, 100]},
+                "axis": {"range": [0, 100] if not has_maxscore_col else [0, max(100.0, overall_risk_raw)]},
                 "bar": {"color": "red"},
                 "steps": [
                     {"range": [0, 30], "color": "green"},
@@ -400,33 +412,35 @@ if summaries:
         gauge_fig_sidebar.update_layout(margin=dict(l=5, r=5, t=20, b=5), height=220)
         st.plotly_chart(gauge_fig_sidebar, use_container_width=True)
 
-    # What-if scenarios
+    # What-if Scenarios
     st.subheader("💡 What-if Scenarios")
-    df_sorted = df_summary.sort_values("RiskScore", ascending=False).head(3).copy()
-    narratives, new_overall = [], overall_score_pct
-    for _, row in df_sorted.iterrows():
-        cat = row["Category"]
-        score = float(row["RiskScore"])
-        fail_count = int(row["TotalFails"])
-        high_count = int(row.get("High", 0))
-        if has_maxscore_col:
-            total_max_score = float(df_summary["MaxScore"].fillna(0).sum())
-            reduction_pct = round((score / max(1.0, total_max_score)) * 100, 2)
-        else:
-            reduction_pct = round((fail_count / max(1, EXPECTED_TOTAL_CHECKS)) * 100, 2)
-        new_overall = max(0, round(new_overall - reduction_pct, 2))
-        narratives.append(
-            f"- **{cat}** has {fail_count} failed checks "
-            f"({high_count} high). Remediation could drop overall risk by ~{reduction_pct}% "
-            f"to **{new_overall}%**."
-        )
-    if narratives:
+    if (df_summary["RiskScore"] > 0).any():
+        df_sorted = df_summary.sort_values("RiskScore", ascending=False).head(3).copy()
+        narratives, new_overall = [], overall_score_pct
+        for _, row in df_sorted.iterrows():
+            cat = row["Category"]
+            score = float(row["RiskScore"])
+            fail_count = int(row["TotalFails"])
+            high_count = int(row.get("High", 0))
+            if has_maxscore_col:
+                total_max_score = float(df_summary["MaxScore"].sum())
+                reduction_pct = round((score / max(1.0, total_max_score)) * 100, 2)
+            else:
+                reduction_pct = round((fail_count / max(1, EXPECTED_TOTAL_CHECKS)) * 100, 2)
+            new_overall = max(0, round(new_overall - reduction_pct, 2))
+            narratives.append(
+                f"- **{cat}** has {fail_count} failed checks "
+                f"({high_count} high). Remediation could drop overall risk by ~{reduction_pct}% "
+                f"to **{new_overall}%**."
+            )
         st.markdown("\n".join(narratives))
         st.info("Prioritise fixes in order of biggest projected drop.")
+    else:
+        st.warning("All RiskScore values are zero. If that’s unexpected, open the Diagnostics panel above.")
 
     st.markdown("---")
 
-    # Radar (Threat Posture)
+    # Radar
     st.subheader("🕸️ Threat Posture (Radar)")
     if (df_summary["RiskScore"] > 0).any():
         radar_fig = go.Figure()
@@ -444,9 +458,9 @@ if summaries:
         )
         st.plotly_chart(radar_fig, use_container_width=True, key="radar_chart_main")
     else:
-        st.success("All category risk scores are zero — radar omitted.")
+        st.info("Radar chart omitted because RiskScore values are all zero.")
 
-    # Severity Breakdown (Bar)
+    # Bar: Severity Breakdown
     st.subheader("📊 Severity Breakdown")
     available_sev = [c for c in ["High", "Medium", "Low"] if c in df_summary.columns]
     if available_sev:
@@ -463,17 +477,16 @@ if summaries:
     else:
         st.info("No severity columns to chart.")
 
-    # Threat Posture Table
+    # Table
     st.subheader("📈 Threat Posture Briefing")
     cols = [c for c in ["Category", "High", "Medium", "Low", "Unknown", "TotalFails", "RiskScore"] if c in df_summary.columns]
     st.dataframe(df_summary[cols], use_container_width=True, key="threat_posture_table_main")
 
-    # Detailed Reports
+    # Detailed reports
     st.subheader("📂 Detailed Reports")
     st.caption("Each section shows the checks behind the score for that category.")
     for title, text in reports:
         with st.expander(title, expanded=False):
             st.code(text or "(no details)", language="text")
-
 else:
-    st.warning("No summary data found — check JSONs under 'Objects/Domain Data' and category functions.")
+    st.warning("No summary data found — check JSON files and category functions.")
