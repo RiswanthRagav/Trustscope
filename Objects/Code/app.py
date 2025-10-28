@@ -114,23 +114,17 @@ st.title(f"DOMAIN – {domain_name.upper()}")
 # ==================== SIDEBAR ====================
 st.sidebar.header("Configuration")
 
-# Risk meter placeholder; updated later
-gauge_fig_sidebar = go.Figure(go.Indicator(
+# Reserve a single sidebar slot for the gauge; we’ll update it later
+gauge_slot = st.sidebar.empty()
+# Render a tiny placeholder so the layout doesn’t jump
+_placeholder = go.Figure(go.Indicator(
     mode="gauge+number", value=0,
     number={"suffix": "%"},
-    title={"text": "Overall Risk (0–100%)"},
-    gauge={
-        "axis": {"range": [0, 100]},
-        "bar": {"color": "red"},
-        "steps": [
-            {"range": [0, 30], "color": "green"},
-            {"range": [30, 70], "color": "yellow"},
-            {"range": [70, 100], "color": "red"},
-        ],
-    }
+    title={"text": "Overall Risk"},
+    gauge={"axis": {"range": [0, 100]}, "bar": {"color": "red"}}
 ))
-gauge_fig_sidebar.update_layout(margin=dict(l=5, r=5, t=20, b=5), height=220)
-st.sidebar.plotly_chart(gauge_fig_sidebar, use_container_width=True)
+_placeholder.update_layout(margin=dict(l=5, r=5, t=20, b=5), height=220)
+gauge_slot.plotly_chart(_placeholder, use_container_width=True)
 
 # Node toggles
 st.sidebar.subheader("Node Types")
@@ -321,7 +315,7 @@ category_specs = [
 
 for cat_func, title in category_specs:
     try:
-        returned = cat_func(INPUT_DIR)  # <- IMPORTANT: categories must actually use this input_dir
+        returned = cat_func(INPUT_DIR)  # categories must use this input_dir internally
         raw_returns.append({"Category": title, "Returned": str(type(returned)), "Preview": str(returned)[:300]})
         if not (isinstance(returned, tuple) and len(returned) == 2):
             raise ValueError("Category did not return (report_text, summary_dict) tuple")
@@ -364,20 +358,65 @@ if summaries:
 
     # KPIs
     EXPECTED_TOTAL_CHECKS = 120
-    total_fails    = int(df_summary["TotalFails"].sum())
-    total_unknowns = int(df_summary["Unknown"].sum())
-    overall_risk_raw = float(df_summary["RiskScore"].sum())
+    total_fails     = int(df_summary["TotalFails"].sum())
+    total_unknowns  = int(df_summary["Unknown"].sum())
+    overall_risk_sum = float(df_summary["RiskScore"].sum())
+    total_max_score = float(df_summary["MaxScore"].sum())
 
-    has_maxscore_col = (df_summary["MaxScore"].sum() > 0)
+    has_maxscore_col = total_max_score > 0
+
+    # Detect “no data” condition (all zeros across key fields)
+    no_data = (
+        len(df_summary) == 0 or
+        (overall_risk_sum == 0 and total_fails == 0 and total_unknowns == 0)
+    )
+
     if has_maxscore_col:
-        total_max_score = float(df_summary["MaxScore"].sum())
-        overall_score_pct = round((overall_risk_raw / max(1.0, total_max_score)) * 100, 2)
+        # Weighted risk percentage
+        overall_pct = round((overall_risk_sum / max(1.0, total_max_score)) * 100, 2)
+        gauge_value = 0.0 if no_data else overall_pct
+        gauge_suffix = "%"
         gauge_title = "Overall Weighted Risk (0–100%)"
+        gauge_range = [0, 100]
     else:
+        # Fall back: failure-rate percentage
         failure_rate = (total_fails + total_unknowns) / max(1, EXPECTED_TOTAL_CHECKS)
-        overall_score_pct = round(failure_rate * 100, 2)
+        overall_pct = round(failure_rate * 100, 2)
+        gauge_value = 0.0 if no_data else overall_pct
+        gauge_suffix = "%"
         gauge_title = "Overall Failure Rate (0–100%)"
+        gauge_range = [0, 100]
 
+    # Also show the raw sum so you can see “actual” points even when we display %
+    st.subheader("📊 Global Overview Metrics")
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    kpi1.metric("Total Checks (ref.)", EXPECTED_TOTAL_CHECKS)
+    kpi2.metric("Total Failures", total_fails)
+    kpi3.metric("Overall Risk (%)", f"{overall_pct}%")
+    kpi4.metric("Raw Risk Sum", int(overall_risk_sum))
+
+    # Update the single sidebar gauge slot
+    gauge_fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=gauge_value,
+        number={"suffix": gauge_suffix},
+        title={"text": gauge_title},
+        gauge={
+            "axis": {"range": gauge_range},
+            "bar": {"color": "red"},
+            "steps": [
+                {"range": [0, 30], "color": "green"},
+                {"range": [30, 70], "color": "yellow"},
+                {"range": [70, 100], "color": "red"},
+            ],
+        }
+    ))
+    gauge_fig.update_layout(margin=dict(l=5, r=5, t=20, b=5), height=220)
+    if no_data:
+        st.sidebar.info("No category data detected — check inputs or open Diagnostics below.")
+    gauge_slot.plotly_chart(gauge_fig, use_container_width=True)
+
+    # Most critical category (by risk sum)
     if len(df_summary) and (df_summary["RiskScore"] > 0).any():
         critical_row = df_summary.loc[df_summary["RiskScore"].idxmax()]
         critical_cat = str(critical_row["Category"])
@@ -385,56 +424,37 @@ if summaries:
     else:
         critical_cat, critical_score = "N/A", 0
 
-    st.subheader("📊 Global Overview Metrics")
-    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    kpi1.metric("Total Checks (ref.)", EXPECTED_TOTAL_CHECKS)
-    kpi2.metric("Total Failures", total_fails)
-    kpi3.metric("Overall Risk Score", f"{overall_score_pct}%")
-    kpi4.metric("Most Critical Category", critical_cat, f"Score {int(critical_score)}")
-
-    # Update sidebar gauge
-    with st.sidebar:
-        gauge_fig_sidebar = go.Figure(go.Indicator(
-            mode="gauge+number",
-            value=overall_risk_raw if has_maxscore_col else overall_score_pct,
-            number={"suffix": "%" if not has_maxscore_col else ""},
-            title={"text": gauge_title},
-            gauge={
-                "axis": {"range": [0, 100] if not has_maxscore_col else [0, max(100.0, overall_risk_raw)]},
-                "bar": {"color": "red"},
-                "steps": [
-                    {"range": [0, 30], "color": "green"},
-                    {"range": [30, 70], "color": "yellow"},
-                    {"range": [70, 100], "color": "red"},
-                ],
-            }
-        ))
-        gauge_fig_sidebar.update_layout(margin=dict(l=5, r=5, t=20, b=5), height=220)
-        st.plotly_chart(gauge_fig_sidebar, use_container_width=True)
+    st.metric("Most Critical Category", critical_cat, f"Score {int(critical_score)}")
 
     # What-if Scenarios
     st.subheader("💡 What-if Scenarios")
     if (df_summary["RiskScore"] > 0).any():
         df_sorted = df_summary.sort_values("RiskScore", ascending=False).head(3).copy()
-        narratives, new_overall = [], overall_score_pct
-        for _, row in df_sorted.iterrows():
-            cat = row["Category"]
-            score = float(row["RiskScore"])
-            fail_count = int(row["TotalFails"])
-            high_count = int(row.get("High", 0))
-            if has_maxscore_col:
-                total_max_score = float(df_summary["MaxScore"].sum())
+        if has_maxscore_col:
+            new_overall = overall_pct
+            narratives = []
+            for _, row in df_sorted.iterrows():
+                cat = row["Category"]
+                score = float(row["RiskScore"])
                 reduction_pct = round((score / max(1.0, total_max_score)) * 100, 2)
-            else:
+                new_overall = max(0, round(new_overall - reduction_pct, 2))
+                narratives.append(
+                    f"- **{cat}** remediation could reduce weighted risk by ~{reduction_pct}% → **{new_overall}%**."
+                )
+        else:
+            # fallback based on failure counts
+            new_overall = overall_pct
+            narratives = []
+            for _, row in df_sorted.iterrows():
+                cat = row["Category"]
+                fail_count = int(row["TotalFails"])
                 reduction_pct = round((fail_count / max(1, EXPECTED_TOTAL_CHECKS)) * 100, 2)
-            new_overall = max(0, round(new_overall - reduction_pct, 2))
-            narratives.append(
-                f"- **{cat}** has {fail_count} failed checks "
-                f"({high_count} high). Remediation could drop overall risk by ~{reduction_pct}% "
-                f"to **{new_overall}%**."
-            )
+                new_overall = max(0, round(new_overall - reduction_pct, 2))
+                narratives.append(
+                    f"- **{cat}** has {fail_count} failed checks. Fixing could drop failure-rate ~{reduction_pct}% → **{new_overall}%**."
+                )
         st.markdown("\n".join(narratives))
-        st.info("Prioritise fixes in order of biggest projected drop.")
+        st.info("Prioritise fixes in order of the biggest projected drop.")
     else:
         st.warning("All RiskScore values are zero. If that’s unexpected, open the Diagnostics panel above.")
 
