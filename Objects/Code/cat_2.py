@@ -1,35 +1,46 @@
 #!/usr/bin/env python3
+# cat_2.py  — Cloud-safe paths (no Windows absolutes) + flexible file discovery
+
 import json, os, xml.etree.ElementTree as ET
+from pathlib import Path
 from collections import Counter, defaultdict
 from typing import Any, Dict, List, Tuple
 from datetime import datetime, timezone, timedelta
 
-# ========= CONFIG =========
-INPUT_DIR = r"C:\Users\LENOVO\OneDrive\Desktop\dissertation\Nexora.local"  # <-- change if needed
+# ========= CONFIG: resolve INPUT_DIR to .../Objects/Domain Data =========
+# This file normally lives in trustscope/Objects/Code/cat_2.py
+# Data is in                            trustscope/Objects/Domain Data
+THIS_FILE = Path(__file__).resolve()
+OBJECTS_DIR = THIS_FILE.parents[1]  # .../Objects
+CANDIDATE_DIRS = [
+    OBJECTS_DIR / "Domain Data",    # canonical
+    OBJECTS_DIR / "DomainData",     # fallback
+    OBJECTS_DIR / "domain data",    # fallback
+]
+INPUT_DIR = next((p for p in CANDIDATE_DIRS if p.exists()), OBJECTS_DIR / "data")
 
+# Core BloodHound-like dumps (filenames only)
+USERS_FILE     = "nexora.local_users.json"
+DOMAINS_FILE   = "nexora.local_domains.json"
+COMPUTERS_FILE = "nexora.local_computers.json"
+GPO_FILE       = "nexora.local_gpos.json"
+
+# Extra exports you created for Category 2 (filenames only)
+# Put them inside "Objects/Domain Data" or "Objects/Domain Data/Extras"
+DC_ENC_JSON             = "DC_SupportedEncryptionTypes.json"
+DOMAIN_ENC_JSON         = "Domain_EncrytptionTypes.json"   # keeping your original filename
+DOMAIN_MODE_JSON        = "Domain_FunctionalLevel.json"
+DOMAIN_PAM_JSON         = "Domain_PAM.json"
+DOMAIN_RECYCLEBIN_JSON  = "Domain_RecycleBin.json"
+POLICY_JSON             = "DefaultDomainPasswordPolicy.json"
+DDP_XML                 = "DefaultDomainPolicy.xml"
+ALL_GPOS_XML            = "AllGPOs.xml"
 # Core BloodHound-like dumps (optional fallback sources)
 USERS_FILE     = "nexora.local_users.json"
 DOMAINS_FILE   = "nexora.local_domains.json"
 COMPUTERS_FILE = "nexora.local_computers.json"
 GPO_FILE       = "nexora.local_gpos.json"
 
-# Extra exports you created for Category 2 (preferred if present)
-DC_ENC_JSON        = r"C:\Users\LENOVO\OneDrive\Desktop\DC_SupportedEncryptionTypes.json"
-DOMAIN_ENC_JSON    = r"C:\Users\LENOVO\OneDrive\Desktop\Domain_EncrytptionTypes.json"   # (intentional filename from your upload)
-DOMAIN_MODE_JSON   = r"C:\Users\LENOVO\OneDrive\Desktop\Domain_FunctionalLevel.json"
-DOMAIN_PAM_JSON    = r"C:\Users\LENOVO\OneDrive\Desktop\Domain_PAM.json"
-POLICY_JSON        = r"C:\Users\LENOVO\OneDrive\Desktop\DefaultDomainPasswordPolicy.json"
-DDP_XML            = r"C:\Users\LENOVO\OneDrive\Desktop\DefaultDomainPolicy.xml"
-ALL_GPOS_XML       = r"C:\Users\LENOVO\OneDrive\Desktop\AllGPOs.xml"
-# Extra exports you created for Category 2 (preferred if present)
-DC_ENC_JSON        = r"C:\Users\LENOVO\OneDrive\Desktop\DC_SupportedEncryptionTypes.json"
-DOMAIN_ENC_JSON    = r"C:\Users\LENOVO\OneDrive\Desktop\Domain_EncrytptionTypes.json"
-DOMAIN_MODE_JSON   = r"C:\Users\LENOVO\OneDrive\Desktop\Domain_FunctionalLevel.json"
-DOMAIN_PAM_JSON    = r"C:\Users\LENOVO\OneDrive\Desktop\Domain_PAM.json"
-DOMAIN_RECYCLEBIN_JSON = r"C:\Users\LENOVO\OneDrive\Desktop\Domain_RecycleBin.json"   # <-- ADD THIS
-POLICY_JSON        = r"C:\Users\LENOVO\OneDrive\Desktop\DefaultDomainPasswordPolicy.json"
-DDP_XML            = r"C:\Users\LENOVO\OneDrive\Desktop\DefaultDomainPolicy.xml"
-ALL_GPOS_XML       = r"C:\Users\LENOVO\OneDrive\Desktop\AllGPOs.xml"
 
 
 # Tunables
@@ -526,3 +537,4 @@ def run_category2(input_dir: str):
     }
 
     return report_text, summary
+
