@@ -267,6 +267,43 @@ def add_containment_edges(coll):
 
 for coll in (domains, ous, containers, users, groups, gpos, computers):
     add_containment_edges(coll)
+
+    ###
+nodes_to_keep = [
+    n for n, a in G.nodes(data=True)
+    if a.get("type") in allowed_types
+]
+
+SG = G.subgraph(nodes_to_keep).copy()
+
+
+# -------------------- GRAPH DEBUG --------------------
+st.subheader("🔍 Graph Construction Debug")
+
+st.write("Raw collections:")
+st.write("domains:", len(domains))
+st.write("ous:", len(ous))
+st.write("containers:", len(containers))
+st.write("users:", len(users))
+st.write("groups:", len(groups))
+st.write("gpos:", len(gpos))
+st.write("computers:", len(computers))
+
+st.write("G nodes before filtering:", G.number_of_nodes())
+st.write("G edges before filtering:", G.number_of_edges())
+
+st.write("Allowed types:", list(allowed_types))
+
+st.write("SG nodes after filtering:", SG.number_of_nodes())
+st.write("SG edges after filtering:", SG.number_of_edges())
+
+if G.number_of_nodes() > 0:
+    st.write(
+        "Sample G nodes:",
+        list(G.nodes(data=True))[:5]
+    )
+
+    ###
 # -------------------- build graph --------------------
 G = nx.DiGraph()
 
