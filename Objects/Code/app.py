@@ -69,6 +69,19 @@ if os.path.exists(domain_data_dir):
 
 else:
     st.error("❌ Domain Data folder was not found.")
+GitHub
+   ↓
+Streamlit
+   ↓
+Objects/Domain Data        ✅ FOUND
+   ↓
+JSON files                 ✅ FOUND
+   ↓
+Parser                     ❓
+   ↓
+Domain graph data          ❌ 0 nodes / 0 edges
+   ↓
+SVG graph                  ❌ empty
 st.markdown(
     """
     # 💂🏻‍♂️ TrustScope – Trust into verified security  
