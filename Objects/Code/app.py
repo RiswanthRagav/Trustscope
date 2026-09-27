@@ -444,18 +444,56 @@ for d in domains:
 
 
 # -------------------- filter by toggles --------------------
-allowed_types = set()
-if show_domain:    allowed_types.add("Domain")
-if show_ou:        allowed_types.add("OU")
-if show_container: allowed_types.add("Container")
-if show_user:      allowed_types.add("User")
-if show_group:     allowed_types.add("Group")
-if show_computer:  allowed_types.update(["Computer", "DC"])
-if show_gpo:       allowed_types.add("GPO")
+a# -------------------- filter by toggles --------------------
 
-nodes_to_keep = [n for n, a in G.nodes(data=True) if a.get("type") in allowed_types]
+allowed_types = set()
+
+if show_domain:
+    allowed_types.add("Domain")
+
+if show_ou:
+    allowed_types.add("OU")
+
+if show_container:
+    allowed_types.add("Container")
+
+if show_user:
+    allowed_types.add("User")
+
+if show_group:
+    allowed_types.add("Group")
+
+if show_computer:
+    allowed_types.update(["Computer", "DC"])
+
+if show_gpo:
+    allowed_types.add("GPO")
+
+nodes_to_keep = [
+    n
+    for n, a in G.nodes(data=True)
+    if a.get("type") in allowed_types
+]
+
 SG = G.subgraph(nodes_to_keep).copy()
 
+st.write("### 🔍 Graph Construction Debug")
+
+st.write("Raw collections:")
+st.write("domains:", len(domains))
+st.write("ous:", len(ous))
+st.write("containers:", len(containers))
+st.write("users:", len(users))
+st.write("groups:", len(groups))
+st.write("gpos:", len(gpos))
+st.write("computers:", len(computers))
+
+st.write("G nodes before filtering:", G.number_of_nodes())
+st.write("G edges before filtering:", G.number_of_edges())
+
+st.write("Allowed types:", list(allowed_types))
+st.write("SG nodes after filtering:", SG.number_of_nodes())
+st.write("SG edges after filtering:", SG.number_of_edges())
 # -------------------- Summary KPIs --------------------
 st.markdown("## 📊 Overview")
 
