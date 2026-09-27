@@ -41,6 +41,18 @@ FILES = {
 
 st.set_page_config(page_title="Trust Scope Risk Assessment", layout="wide")
 
+import os
+
+st.subheader("🔍 Debug: Domain Data")
+
+base_dir = os.path.dirname(os.path.abspath(__file__))
+
+st.write("App directory:", base_dir)
+
+for root, dirs, files in os.walk(base_dir):
+    for file in files:
+        if file.endswith(".json"):
+            st.write(os.path.join(root, file))
 st.markdown(
     """
     # 💂🏻‍♂️ TrustScope – Trust into verified security  
