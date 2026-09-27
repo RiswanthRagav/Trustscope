@@ -27,8 +27,15 @@ from cat_13 import run_category13
 # ---- CONFIG ----
 from pathlib import Path
 
+# app.py is inside: Objects/Code/
 BASE_DIR = Path(__file__).resolve().parent
-INPUT_DIR = BASE_DIR / "Objects" / "Domain Data"
+
+# Go from Objects/Code -> Objects
+OBJECTS_DIR = BASE_DIR.parent
+
+# Domain Data is inside Objects
+INPUT_DIR = OBJECTS_DIR / "Domain Data"
+
 FILES = {
     "ous":        "nexora.local_ous.json",
     "users":      "nexora.local_users.json",
