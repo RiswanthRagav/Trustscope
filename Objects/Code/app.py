@@ -411,7 +411,17 @@ kpi_card(col3, "📂", "Groups", len(groups), "#f59e0b", groups)
 kpi_card(col4, "🖥️", "Computers", len(computers), "#9333ea", computers)
 kpi_card(col5, "🏢", "OUs", len(ous), "#16a34a", ous)
 kpi_card(col6, "📜", "GPOs", len(gpos), "#ec4899", gpos)
+###
+st.write("🔍 Graph Debug")
+st.write("SG type:", type(SG).__name__)
+st.write("SG nodes:", SG.number_of_nodes())
+st.write("SG edges:", SG.number_of_edges())
 
+if SG.number_of_nodes() > 0:
+    st.write("Sample nodes:", list(SG.nodes(data=True))[:5])
+
+if SG.number_of_edges() > 0:
+    st.write("Sample edges:", list(SG.edges(data=True))[:5])
 # -------------------- Visualize Domain Graph --------------------
 st.markdown("## 🌐 Domain Map")
 st.caption("Drag nodes • Zoom with mouse wheel • Use sidebar filters to refine view")
