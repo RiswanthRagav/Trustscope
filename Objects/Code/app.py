@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Dict, Any, List
 
 import streamlit as st
-from streamlit.components.v1 import html
+import streamlit.components.v1 as components
 import pandas as pd
 df_summary = pd.DataFrame()
 import networkx as nx
@@ -25,7 +25,10 @@ from cat_12 import run_category12
 from cat_13 import run_category13
 
 # ---- CONFIG ----
-INPUT_DIR = r"C:\Users\LENOVO\OneDrive\Desktop\dissertation\Nexora.local"
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+INPUT_DIR = BASE_DIR / "Objects" / "Domain Data"
 FILES = {
     "ous":        "nexora.local_ous.json",
     "users":      "nexora.local_users.json",
@@ -383,14 +386,18 @@ kpi_card(col6, "📜", "GPOs", len(gpos), "#ec4899", gpos)
 # -------------------- Visualize Domain Graph --------------------
 st.markdown("## 🌐 Domain Map")
 st.caption("Drag nodes • Zoom with mouse wheel • Use sidebar filters to refine view")
-
+st.write(
+    f"Domain Map: {SG.number_of_nodes()} nodes, "
+    f"{SG.number_of_edges()} edges"
+)
 net = Network(
     height="780px",
     width="100%",
     bgcolor="#0d1117",
     font_color="#e6edf3",
     notebook=False,
-    directed=True
+    directed=True,
+    cdn_resources="in_line"
 )
 
 options = {
@@ -455,7 +462,12 @@ for u, v, a in SG.edges(data=True):
     net.add_edge(u, v, title=rel)
 
 html_str = net.generate_html(notebook=False)
-html(html_str, height=800, scrolling=True)
+
+components.html(
+    html_str,
+    height=800,
+    scrolling=True
+)
 
 # -------------------- Risk Dashboard --------------------
 st.title("⚠️ Risk Assessment")

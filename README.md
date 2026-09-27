@@ -1,4 +1,4 @@
-# TrustScope
++6+# TrustScope
 A transparent, graph-powered AD risk framework with explainable scoring and path-aware remediation—built for fast, auditable identity hardening.
 
 ## TrustScope: Open, Explainable AD Risk Scoring & Attack-Path Analytics
