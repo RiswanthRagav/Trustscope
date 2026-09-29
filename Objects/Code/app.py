@@ -338,23 +338,7 @@ nodes_to_keep = [
 
 SG = G.subgraph(nodes_to_keep).copy()
 
-st.subheader("🔍 Graph Construction Debug")
 
-st.write("Raw collections:")
-st.write("domains:", len(domains))
-st.write("ous:", len(ous))
-st.write("containers:", len(containers))
-st.write("users:", len(users))
-st.write("groups:", len(groups))
-st.write("gpos:", len(gpos))
-st.write("computers:", len(computers))
-
-st.write("G nodes before filtering:", G.number_of_nodes())
-st.write("G edges before filtering:", G.number_of_edges())
-
-st.write("Allowed types:", list(allowed_types))
-st.write("SG nodes after filtering:", SG.number_of_nodes())
-st.write("SG edges after filtering:", SG.number_of_edges())
 # -------------------- Summary KPIs --------------------
 st.markdown("## 📊 Overview")
 
