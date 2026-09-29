@@ -2,7 +2,6 @@
 import json
 from pathlib import Path
 from typing import Dict, Any, List
-
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -25,7 +24,6 @@ from cat_12 import run_category12
 from cat_13 import run_category13
 
 # ---- CONFIG ----
-from pathlib import Path
 
 # app.py is inside: Objects/Code/
 BASE_DIR = Path(__file__).resolve().parent
@@ -112,40 +110,6 @@ if domains_file.exists():
 st.title(f"DOMAIN – {domain_name.upper()}")
 
 # -------------------- helpers --------------------
-def load_json_list(path: Path) -> List[Dict[str, Any]]:
-    if not path.exists():
-        st.warning(f"File does not exist: {path}")
-        return []
-
-    try:
-        with path.open("r", encoding="utf-8") as f:
-            obj = json.load(f)
-    except Exception as e:
-        st.error(f"Failed to read {path.name}: {e}")
-        return []
-
-    # Debug information
-    st.write(f"### JSON Debug: {path.name}")
-    st.write("Top-level type:", type(obj).__name__)
-
-    if isinstance(obj, dict):
-        st.write("Top-level keys:", list(obj.keys()))
-
-        if isinstance(obj.get("data"), list):
-            st.write("data entries:", len(obj["data"]))
-            return obj["data"]
-
-    if isinstance(obj, list):
-        st.write("List entries:", len(obj))
-        return obj
-
-    st.warning(
-        f"Unsupported JSON structure in {path.name}. "
-        f"Expected a list or a dictionary containing a 'data' list."
-    )
-
-    return []
-###
 def load_json_list(path: Path) -> List[Dict[str, Any]]:
     if not path.exists():
         st.warning(f"File does not exist: {path}")
@@ -307,81 +271,6 @@ def add_node_from_obj(obj, ntype: str):
         G.add_node(dn, label=name, type=ntype)
     return dn
 
-for d in domains:    add_node_from_obj(d, "Domain")
-for ou in ous:       add_node_from_obj(ou, "OU")
-for ct in containers:add_node_from_obj(ct, "Container")
-for u in users:      add_node_from_obj(u, "User")
-for g in groups:     add_node_from_obj(g, "Group")
-for gp in gpos:      add_node_from_obj(gp, "GPO")   # ✅ GPOs now added
-for c in computers:
-    dn   = prop(c, "distinguishedname")
-    name = prop(c, "name") or dn or "Computer"
-    ntype = "DC" if dn and "OU=Domain Controllers" in dn else "Computer"
-    if dn and dn not in G:
-        G.add_node(dn, label=name, type=ntype)
-
-def add_containment_edges(coll):
-    for obj in coll:
-        child_dn = prop(obj, "distinguishedname")
-        if not child_dn or child_dn not in G:
-            continue
-        parent_dn = dn_parent(child_dn)
-        if parent_dn:
-            if parent_dn not in G:
-                G.add_node(parent_dn, label=parent_dn, type="Container")
-            G.add_edge(parent_dn, child_dn, relationship="contains")
-
-for coll in (domains, ous, containers, users, groups, gpos, computers):
-    add_containment_edges(coll)
-
-    ###
-nodes_to_keep = [
-    n for n, a in G.nodes(data=True)
-    if a.get("type") in allowed_types
-]
-
-SG = G.subgraph(nodes_to_keep).copy()
-
-
-# -------------------- GRAPH DEBUG --------------------
-st.subheader("🔍 Graph Construction Debug")
-
-st.write("Raw collections:")
-st.write("domains:", len(domains))
-st.write("ous:", len(ous))
-st.write("containers:", len(containers))
-st.write("users:", len(users))
-st.write("groups:", len(groups))
-st.write("gpos:", len(gpos))
-st.write("computers:", len(computers))
-
-st.write("G nodes before filtering:", G.number_of_nodes())
-st.write("G edges before filtering:", G.number_of_edges())
-
-st.write("Allowed types:", list(allowed_types))
-
-st.write("SG nodes after filtering:", SG.number_of_nodes())
-st.write("SG edges after filtering:", SG.number_of_edges())
-
-if G.number_of_nodes() > 0:
-    st.write(
-        "Sample G nodes:",
-        list(G.nodes(data=True))[:5]
-    )
-
-    ###
-# -------------------- build graph --------------------
-G = nx.DiGraph()
-
-def add_node_from_obj(obj, ntype: str):
-    dn   = prop(obj, "distinguishedname")
-    name = prop(obj, "name") or dn or ntype
-    if not dn:
-        return None
-    if dn not in G:
-        G.add_node(dn, label=name, type=ntype)
-    return dn
-
 # Add nodes
 for d in domains:    add_node_from_obj(d, "Domain")
 for ou in ous:       add_node_from_obj(ou, "OU")
@@ -444,7 +333,7 @@ for d in domains:
 
 
 # -------------------- filter by toggles --------------------
-a# -------------------- filter by toggles --------------------
+# -------------------- filter by toggles --------------------
 
 allowed_types = set()
 
@@ -477,7 +366,7 @@ nodes_to_keep = [
 
 SG = G.subgraph(nodes_to_keep).copy()
 
-st.write("### 🔍 Graph Construction Debug")
+st.subheader("🔍 Graph Construction Debug")
 
 st.write("Raw collections:")
 st.write("domains:", len(domains))
