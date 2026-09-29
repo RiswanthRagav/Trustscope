@@ -47,34 +47,6 @@ FILES = {
 st.set_page_config(page_title="Trust Scope Risk Assessment", layout="wide")
 
 import os
-
-st.subheader("🔍 Debug: Domain Data")
-
-base_dir = os.path.dirname(os.path.abspath(__file__))
-
-# Go from Objects/Code → Objects
-objects_dir = os.path.dirname(base_dir)
-
-# Objects → Domain Data
-domain_data_dir = os.path.join(objects_dir, "Domain Data")
-
-st.write("Code directory:", base_dir)
-st.write("Objects directory:", objects_dir)
-st.write("Domain Data directory:", domain_data_dir)
-st.write("Domain Data exists:", os.path.exists(domain_data_dir))
-
-if os.path.exists(domain_data_dir):
-
-    st.write("Files found:")
-
-    for root, dirs, files in os.walk(domain_data_dir):
-        for file in files:
-            if file.lower().endswith(".json"):
-                st.write(os.path.join(root, file))
-
-else:
-    st.error("❌ Domain Data folder was not found.")
-
 st.markdown(
     """
     # 💂🏻‍♂️ TrustScope – Trust into verified security  
