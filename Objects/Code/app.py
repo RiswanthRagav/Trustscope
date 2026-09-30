@@ -94,6 +94,38 @@ def load_json_list(path: Path) -> List[Dict[str, Any]]:
         st.error(f"Failed to read {path.name}: {e}")
         return []
 
+    # Debug information
+    st.write(f"### JSON Debug: {path.name}")
+    st.write("Top-level type:", type(obj).__name__)
+
+    if isinstance(obj, dict):
+        st.write("Top-level keys:", list(obj.keys()))
+
+        if isinstance(obj.get("data"), list):
+            st.write("data entries:", len(obj["data"]))
+            return obj["data"]
+
+    if isinstance(obj, list):
+        st.write("List entries:", len(obj))
+        return obj
+
+    st.warning(
+        f"Unsupported JSON structure in {path.name}. "
+        f"Expected a list or a dictionary containing a 'data' list."
+    )
+
+    return []
+
+
+def prop(o: Dict[str, Any], key: str, default=None):
+    return (o.get("Properties") or {}).get(key, default)
+
+
+def dn_parent(dn: str) -> str:
+    if not dn or "," not in dn:
+        return ""
+    return dn.split(",", 1)[1]
+###
 # -------------------- sidebar --------------------
 st.sidebar.header("Configuration")
 data_dir = INPUT_DIR
