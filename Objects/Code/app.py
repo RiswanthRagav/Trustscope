@@ -94,29 +94,6 @@ def load_json_list(path: Path) -> List[Dict[str, Any]]:
         st.error(f"Failed to read {path.name}: {e}")
         return []
 
-    # Debug information
-    st.write(f"### JSON Debug: {path.name}")
-    st.write("Top-level type:", type(obj).__name__)
-
-    if isinstance(obj, dict):
-        st.write("Top-level keys:", list(obj.keys()))
-
-        if isinstance(obj.get("data"), list):
-            st.write("data entries:", len(obj["data"]))
-            return obj["data"]
-
-    if isinstance(obj, list):
-        st.write("List entries:", len(obj))
-        return obj
-
-    st.warning(
-        f"Unsupported JSON structure in {path.name}. "
-        f"Expected a list or a dictionary containing a 'data' list."
-    )
-
-    return []
-
-
 def prop(o: Dict[str, Any], key: str, default=None):
     return (o.get("Properties") or {}).get(key, default)
 
@@ -235,12 +212,27 @@ computers, domains, gpos, containers = data["computers"], data["domains"], data[
 G = nx.DiGraph()
 
 def add_node_from_obj(obj, ntype: str):
-    dn   = prop(obj, "distinguishedname")
-    name = prop(obj, "name") or dn or ntype
+    if not isinstance(obj, dict):
+        return None
+
+    properties = obj.get("Properties")
+
+    if not isinstance(properties, dict):
+        return None
+
+    dn = properties.get("distinguishedname")
+    name = properties.get("name") or dn or ntype
+
     if not dn:
         return None
+
     if dn not in G:
-        G.add_node(dn, label=name, type=ntype)
+        G.add_node(
+            dn,
+            label=name,
+            type=ntype
+        )
+
     return dn
 
 # Add nodes
@@ -269,9 +261,16 @@ def add_containment_edges(coll):
                 G.add_node(parent_dn, label=parent_dn, type="Container")
             G.add_edge(parent_dn, child_dn, relationship="contains")
 
-for coll in (domains, ous, containers, users, groups, computers):
+for coll in (
+    domains,
+    ous,
+    containers,
+    users,
+    groups,
+    gpos,
+    computers
+):
     add_containment_edges(coll)
-
 # --- Extra relationship edges ---
 
 # Group memberships
