@@ -94,6 +94,16 @@ def load_json_list(path: Path) -> List[Dict[str, Any]]:
         st.error(f"Failed to read {path.name}: {e}")
         return []
 
+    if isinstance(obj, dict) and isinstance(obj.get("data"), list):
+        return obj["data"]
+
+    if isinstance(obj, list):
+        return obj
+
+    st.warning(f"Unsupported JSON structure in {path.name}")
+    return []
+
+
 def prop(o: Dict[str, Any], key: str, default=None):
     return (o.get("Properties") or {}).get(key, default)
 
